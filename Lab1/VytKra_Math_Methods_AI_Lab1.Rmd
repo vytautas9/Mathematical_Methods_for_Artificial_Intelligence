@@ -1,5 +1,5 @@
 ---
-title: "Lab 1"
+title: "VytKra Mathematical Methods for Artificial Intelligence Lab 1"
 output: word_document
 ---
 
@@ -82,32 +82,32 @@ library(tidyr)
 library(stringr)
 
 # Temp list to extract parts of dataset columns
-temp <- list()
-
-# We'll need an ID column later on
-data <- data %>% 
-  mutate(ID = seq(1:nrow(data)))
-
-# We extract the feature name from the columns
-for(i in 1:length(variables)){
-  temp[[i]] <- data[,grepl(variables[i], colnames(data))] %>% 
-    mutate(Variable = names(variables[i]),
-           Variable_Keyword = variables[i]) %>% 
-    bind_cols(data %>% select(ID)) %>% 
-  pivot_longer(!c(Variable, Variable_Keyword, ID), names_to = "Feature_Full", values_to = "Value")
-}
-
-# We extract the variable name and bring back to the structure of dataset
-data <- bind_rows(temp) %>% 
-  mutate(
-    Feature_Keyword = Feature_Full %>%
-      str_remove(pattern = paste0("_", Variable_Keyword)),
-    Feature = names(features[match(Feature_Keyword,  features)])
-  ) %>% 
-  select(-Variable_Keyword, -Feature_Full, -Feature_Keyword) %>% 
-  pivot_wider(names_from = c("Variable", "Feature"), values_from = "Value") %>% 
-  bind_cols(data %>% select(1,(length(features)*length(variables)+2):(ncol(data)-1))) %>% 
-  select(-ID)
+# temp <- list()
+# 
+# # We'll need an ID column later on
+# data <- data %>% 
+#   mutate(ID = seq(1:nrow(data)))
+# 
+# # We extract the feature name from the columns
+# for(i in 1:length(variables)){
+#   temp[[i]] <- data[,grepl(variables[i], colnames(data))] %>% 
+#     mutate(Variable = names(variables[i]),
+#            Variable_Keyword = variables[i]) %>% 
+#     bind_cols(data %>% select(ID)) %>% 
+#   pivot_longer(!c(Variable, Variable_Keyword, ID), names_to = "Feature_Full", values_to = "Value")
+# }
+# 
+# # We extract the variable name and bring back to the structure of dataset
+# data <- bind_rows(temp) %>% 
+#   mutate(
+#     Feature_Keyword = Feature_Full %>%
+#       str_remove(pattern = paste0("_", Variable_Keyword)),
+#     Feature = names(features[match(Feature_Keyword,  features)])
+#   ) %>% 
+#   select(-Variable_Keyword, -Feature_Full, -Feature_Keyword) %>% 
+#   pivot_wider(names_from = c("Variable", "Feature"), values_from = "Value") %>% 
+#   bind_cols(data %>% select(1,(length(features)*length(variables)+2):(ncol(data)-1))) %>% 
+#   select(-ID)
 
 ```
 
@@ -160,22 +160,21 @@ corr_simple <- function(df,sig=0.5){
   return(corr)
 }
 
-temp <- corr_simple(data, 0.9) %>% 
-  separate(Var1, c("Var1-Variable", "Var1-Feature"), sep = "_", extra = "merge", remove = FALSE) %>% 
-  separate(Var2, c("Var2-Variable", "Var2-Feature"), sep = "_", extra = "merge", remove = FALSE)
-
-
-different_variables <- temp %>% 
-  filter(`Var1-Variable` != `Var2-Variable`)
-
-same_variables <- temp %>% 
-  filter(`Var1-Variable` == `Var2-Variable`)
+# temp <- corr_simple(data, 0.9) %>% 
+#   separate(Var1, c("Var1-Variable", "Var1-Feature"), sep = "_", extra = "merge", remove = FALSE) %>% 
+#   separate(Var2, c("Var2-Variable", "Var2-Feature"), sep = "_", extra = "merge", remove = FALSE)
+# 
+# 
+# different_variables <- temp %>% 
+#   filter(`Var1-Variable` != `Var2-Variable`)
+# 
+# same_variables <- temp %>% 
+#   filter(`Var1-Variable` == `Var2-Variable`)
 
 ```
 
 # Task 2
 ```{r}
-NewData = data[1:1000,]
 
 
 library(boot)
@@ -192,10 +191,117 @@ model <- train(critical_temp ~ ., data = NewData, method = "lm", trControl = tra
 print(model)
 
 
-
+# Whole dataset
 train.control1 <- trainControl(method = "cv", number = 10)
-model1 <- train(critical_temp ~ ., data = NewData, method = "lm", trControl = train.control1)
-print(model1)
+model_whole_dataset <- train(critical_temp ~ ., data = NewData, method = "lm", trControl = train.control1)
+print(model_whole_dataset)
+
+
+# Removed >.95 correlations
+correlation_matrix = cor(NewData)
+correlated_columns = findCorrelation(correlation_matrix, cutoff = 0.95)
+correlated_columns = sort(correlated_columns)
+data_no_correlated_95 = data[,-c(correlated_columns)]
+
+model_no_correlated_95 <- train(critical_temp ~ ., data = data_no_correlated_95, method = "lm", trControl = train.control1)
+print(model_no_correlated_95)
+
+
+
+
+```
+
+# xgboost
+```{r}
+# https://www.r-bloggers.com/2020/11/r-xgboost-regression/
+library(xgboost)
+library(DiagrammeR)
+set.seed(123)
+NewData_xgboost <- as.matrix(data)
+indices <- sample(1:nrow(NewData_xgboost), size = 0.75 * nrow(NewData_xgboost))
+train <- NewData_xgboost[indices,]
+test <- NewData_xgboost[-indices,]
+
+label_index <- which(colnames(NewData_xgboost) == "critical_temp")
+
+m1_xgb <-
+  xgboost(
+    data = train[, -label_index],
+    label = train[, label_index],
+    nrounds = 1000,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 3,
+    max_depth = 6,
+    eta = .25
+  )
+
+pred_xgb <- predict(m1_xgb, test[, -label_index])
+
+yhat <- pred_xgb
+y <- test[, label_index]
+postResample(yhat, y)
+
+
+r <- y - yhat
+plot(r, ylab = "residuals", main = title)
+
+
+plot(y,
+     yhat,
+     xlab = "actual",
+     ylab = "predicted",
+     main = title)
+abline(lm(yhat ~ y))
+
+
+#plot first 3 trees of model
+xgb.plot.tree(model = m1_xgb, trees = 0:2)
+
+importance_matrix <- xgb.importance(model = m1_xgb)
+xgb.plot.importance(importance_matrix, xlab = "Feature Importance")
+
+
+
+
+
+#grid search
+#create hyperparameter grid
+hyper_grid <- expand.grid(max_depth = seq(3, 6, 1),
+                          eta = seq(.2, .35, .01))
+xgb_train_rmse <- NULL
+xgb_test_rmse <- NULL
+
+for (j in 1:nrow(hyper_grid)) {
+  set.seed(123)
+  m_xgb_untuned <- xgb.cv(
+    data = train[, 2:34],
+    label = train[, 1],
+    nrounds = 1000,
+    objective = "reg:squarederror",
+    early_stopping_rounds = 3,
+    nfold = 5,
+    max_depth = hyper_grid$max_depth[j],
+    eta = hyper_grid$eta[j]
+  )
+  
+  xgb_train_rmse[j] <- m_xgb_untuned$evaluation_log$train_rmse_mean[m_xgb_untuned$best_iteration]
+  xgb_test_rmse[j] <- m_xgb_untuned$evaluation_log$test_rmse_mean[m_xgb_untuned$best_iteration]
+  
+  cat(j, "\n")
+}
+
+#ideal hyperparamters
+hyper_grid[which.min(xgb_test_rmse), ]
+
+
+
+
+
+
+
+
+
+
 
 
 ```
