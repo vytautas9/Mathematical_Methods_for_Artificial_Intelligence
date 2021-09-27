@@ -1,0 +1,201 @@
+---
+title: "Lab 1"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Reading Data
+```{r}
+data <- read.csv("superconductor_dataset.csv")
+```
+
+# Preparation
+```{r}
+# List of variables names
+variables_names <- c(
+  "Atomic Mass",
+  "First Ionization Energy",
+  "Atomic Radius",
+  "Density",
+  "Electron Affinity",
+  "Fusion Heat",
+  "Thermal Conductivity",
+  "Valence"
+)
+
+# List of variable keywords in a dataset
+variables <- c(
+  "atomic_mass",
+  "fie",
+  "atomic_radius",
+  "Density",
+  "ElectronAffinity",
+  "FusionHeat",
+  "ThermalConductivity",
+  "Valence"
+)
+
+names(variables) <- variables_names
+
+# Variables:
+variables
+
+features_names <- c(
+  "Mean",
+  "Weighted mean",
+  "Geometric mean",
+  "Weighted geometric mean",
+  "Entropy",
+  "Weighted entropy",
+  "Range",
+  "Weighted range",
+  "Standard deviation",
+  "Weighted standard deviation"
+)
+
+features <- c(
+  "mean",
+  "wtd_mean",
+  "gmean",
+  "wtd_gmean",
+  "entropy",
+  "wtd_entropy",
+  "range",
+  "wtd_range",
+  "std",
+  "wtd_std"
+)
+
+names(features) <- features_names
+
+# Feautres:
+features
+```
+
+# Data prep
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+
+# Temp list to extract parts of dataset columns
+temp <- list()
+
+# We'll need an ID column later on
+data <- data %>% 
+  mutate(ID = seq(1:nrow(data)))
+
+# We extract the feature name from the columns
+for(i in 1:length(variables)){
+  temp[[i]] <- data[,grepl(variables[i], colnames(data))] %>% 
+    mutate(Variable = names(variables[i]),
+           Variable_Keyword = variables[i]) %>% 
+    bind_cols(data %>% select(ID)) %>% 
+  pivot_longer(!c(Variable, Variable_Keyword, ID), names_to = "Feature_Full", values_to = "Value")
+}
+
+# We extract the variable name and bring back to the structure of dataset
+data <- bind_rows(temp) %>% 
+  mutate(
+    Feature_Keyword = Feature_Full %>%
+      str_remove(pattern = paste0("_", Variable_Keyword)),
+    Feature = names(features[match(Feature_Keyword,  features)])
+  ) %>% 
+  select(-Variable_Keyword, -Feature_Full, -Feature_Keyword) %>% 
+  pivot_wider(names_from = c("Variable", "Feature"), values_from = "Value") %>% 
+  bind_cols(data %>% select(1,(length(features)*length(variables)+2):(ncol(data)-1))) %>% 
+  select(-ID)
+
+```
+
+# EDA
+```{r}
+library(SmartEDA)
+
+# Overview of the data - Type = 1
+ExpData(data,type=1)
+# we have only 1 text variable, no missing values
+
+n_distinct(data %>% select(material))
+nrow(data)
+# 15542 unique values out of 21263, we will not use this column
+
+data <- data %>% select(-material)
+
+
+library(purrr)
+
+# Return a character vector of variable names which have 0 variance
+variables_with_zero_var <- names(data)[which(map_dbl(data, var) == 0)]
+
+summary(data[,variables_with_zero_var])
+# Those columns dont hold any info, we'll exclude them
+
+data <- data %>% select(-all_of(variables_with_zero_var))
+
+
+# Target variable
+summary( data %>% select(critical_temp) )
+
+
+# Correlation
+library(corrplot)
+corr_simple <- function(df,sig=0.5){
+  corr <- cor(df)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > sig) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  return(corr)
+}
+
+temp <- corr_simple(data, 0.9) %>% 
+  separate(Var1, c("Var1-Variable", "Var1-Feature"), sep = "_", extra = "merge", remove = FALSE) %>% 
+  separate(Var2, c("Var2-Variable", "Var2-Feature"), sep = "_", extra = "merge", remove = FALSE)
+
+
+different_variables <- temp %>% 
+  filter(`Var1-Variable` != `Var2-Variable`)
+
+same_variables <- temp %>% 
+  filter(`Var1-Variable` == `Var2-Variable`)
+
+```
+
+# Task 2
+```{r}
+NewData = data[1:1000,]
+
+
+library(boot)
+CriticalTemperature_LR <- glm(critical_temp ~ ., data = NewData)
+cv.mse <- cv.glm(NewData, CriticalTemperature_LR)
+cv.mse$delta
+
+
+
+
+library(caret)
+train.control <- trainControl(method = "LOOCV")
+model <- train(critical_temp ~ ., data = NewData, method = "lm", trControl = train.control)
+print(model)
+
+
+
+train.control1 <- trainControl(method = "cv", number = 10)
+model1 <- train(critical_temp ~ ., data = NewData, method = "lm", trControl = train.control1)
+print(model1)
+
+
+```
