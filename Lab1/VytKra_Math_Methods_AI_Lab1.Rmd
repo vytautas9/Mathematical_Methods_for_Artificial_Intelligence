@@ -41,7 +41,7 @@ variables <- c(
 names(variables) <- variables_names
 
 # Variables:
-variables
+print(variables)
 
 features_names <- c(
   "Mean",
@@ -72,7 +72,7 @@ features <- c(
 names(features) <- features_names
 
 # Feautres:
-features
+print(features)
 ```
 
 # Data prep
@@ -173,42 +173,114 @@ corr_simple <- function(df,sig=0.5){
 
 ```
 
+# Data split
+```{r}
+set.seed(123)
+library(caret)
+indices <- createDataPartition(data$critical_temp, p = 0.8, list = FALSE)
+train <- data[indices,]
+test <- data[-indices,]
+
+preProcValues <- preProcess(train, method = c("center", "scale"))
+train_transformed <- predict(preProcValues, train)
+test_transformed <- predict(preProcValues, test)
+
+label_index <- which(colnames(train_transformed) == "critical_temp")
+```
+
+
 # Task 2
 ```{r}
+library(parallel)
+library(doParallel)
+
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+# linear regression
+train_control_cv <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+fit_lm <- train(critical_temp ~ ., data = train_transformed, method = "lm", trControl = train_control_cv)
+print(fit_lm)
+
+test_lm <- predict(fit_lm, newdata = test_transformed)
+round(postResample(pred = test_lm, obs = test_transformed$critical_temp), 3)
 
 
-library(boot)
-CriticalTemperature_LR <- glm(critical_temp ~ ., data = NewData)
-cv.mse <- cv.glm(NewData, CriticalTemperature_LR)
-cv.mse$delta
+# random forest
+fit_rf <- train(critical_temp ~ ., data = train_transformed, method = "rf") # pridet cv
+print(fit_rf)
+test_rf <- predict(fit_rf, newdata = test_transformed)
+round(postResample(pred = test_rf, obs = test_transformed$critical_temp), 3)
+
+# glmnet
+fit_glmnet <- train(critical_temp ~ ., data = train_transformed, method = "glmnet") # pridet cv
+print(fit_glmnet)
+test_glmnet <- predict(fit_glmnet, newdata = test_transformed)
+round(postResample(pred = test_glmnet, obs = test_transformed$critical_temp), 3)
+
+arrange(fit_glmnet$results, RMSE) %>% head
+fit_glmnet$bestTune
 
 
+# gradient boosting
+# We use expand grid to create a table of all possible combinations
+tg <- expand.grid(shrinkage = seq(0.1, 1, by = 0.2), 
+                  interaction.depth = c(1, 3, 7, 10),
+                  n.minobsinnode = c(2, 5, 10),
+                  n.trees = c(100, 300, 500, 1000))
+fit_gbm <- train(critical_temp ~ ., data = train_transformed, method = "gbm", tuneGrid =tg, verbose = FALSE) # cv pridet
+print(fit_gbm)
+test_gbm <- predict(fit_gbm, newdata = test_transformed)
+round(postResample(pred = test_gbm, obs = test_transformed$critical_temp), 3)
 
-
-library(caret)
-train.control <- trainControl(method = "LOOCV")
-model <- train(critical_temp ~ ., data = NewData, method = "lm", trControl = train.control)
-print(model)
-
-
-# Whole dataset
-train.control1 <- trainControl(method = "cv", number = 10)
-model_whole_dataset <- train(critical_temp ~ ., data = NewData, method = "lm", trControl = train.control1)
-print(model_whole_dataset)
+arrange(fit_gbm$results, RMSE) %>% head
+fit_gbm$bestTune
 
 
 # Removed >.95 correlations
-correlation_matrix = cor(NewData)
+correlation_matrix = cor(train_transformed)
 correlated_columns = findCorrelation(correlation_matrix, cutoff = 0.95)
 correlated_columns = sort(correlated_columns)
-data_no_correlated_95 = data[,-c(correlated_columns)]
+train_transformed_no_correlated_95 = train_transformed[,-c(correlated_columns)]
 
-model_no_correlated_95 <- train(critical_temp ~ ., data = data_no_correlated_95, method = "lm", trControl = train.control1)
-print(model_no_correlated_95)
+fit_lm_no_correlated_95 <- train(critical_temp ~ ., data = train_transformed_no_correlated_95, method = "lm", trControl = train_control_cv)
+print(fit_lm_no_correlated_95)
+test_lm_noCorr <- predict(fit_lm_no_correlated_95, newdata = test_transformed)
+round(postResample(pred = test_lm_noCorr, obs = test_transformed$critical_temp), 3)
+
+stopCluster(cluster)
+
+
+mods <- resamples(list(lm = fit_lm, rf = fit_rf , glmnet = fit_glmen, gbm = fit_gbm, lm_noCorr = fit_lm_no_correlated_95))
+summary(mods)
+#compare_models(glmnet_model, gbm_model)
 
 
 
 
+
+# xgboost
+tune_grid <- expand.grid(nrounds=c(100,200,300,400),
+                        max_depth = c(3:7),
+                        eta = c(0.05, 1),
+                        gamma = c(0.01),
+                        colsample_bytree = c(0.75),
+                        subsample = c(0.50),
+                        min_child_weight = c(0))
+
+fit_xgboost <- train(critical_temp ~., data = train_transformed, method = "xgbTree",
+                trControl = train_control_cv,
+                tuneGrid = tune_grid,
+                tuneLength = 10)
+
+
+
+
+```
+
+```{r}
+library(randomForest)
+fit_rf <- randomForest(x = train_transformed[, -label_index], y = train_transformed[, label_index])
 ```
 
 # xgboost
@@ -260,7 +332,7 @@ xgb.plot.tree(model = m1_xgb, trees = 0:2)
 importance_matrix <- xgb.importance(model = m1_xgb)
 xgb.plot.importance(importance_matrix, xlab = "Feature Importance")
 
-
+head(importance_matrix)
 
 
 
