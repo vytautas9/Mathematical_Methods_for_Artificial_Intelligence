@@ -33,10 +33,14 @@ ExpData(data,type=1)
 We have 168 numeric variables and only 1 text variable, no missing values. There are 9 columns with zero variance, we'll look at it later.
 
 Let's look at the text variable:
-`r head(data$material)`
+```{r}
+head(data$material)
+```
+
 Out of total `r nrow(data)` observations, we have `r n_distinct(data %>% select(material))` unique record in this text column.
 We won't be using this variable in our analysis.
 
+We should look at the variables with zero variance:
 ```{r}
 data <- data %>% select(-material)
 
@@ -59,11 +63,14 @@ ggplot(data, aes(x=critical_temp)) +
   geom_boxplot() +
   theme_minimal()
 ```
+
 Seems like we have one outlier at >150. We will remove this observation
 ```{r}
 data <- data %>% filter(critical_temp < 150)
 ```
 
+
+Let's look at descriptive statistics of each variable:
 ```{r}
 ExpNumStat(data,by ="A",Outlier=TRUE,round= 2, gp = "critical_temp") %>% 
   select(Vname, min, max, mean, median, SD, nOutliers)
@@ -127,7 +134,9 @@ fit_lm <- train(critical_temp ~ ., data = train_transformed, method = "lm", trCo
 
 We are performing linear regression model on the whole training dataset with 10 fold cross-validation.
 The model:
-`r print(fit_lm)`
+```{r}
+print(fit_lm)
+```
 
 Using fitted linear regression model on the testing dataset:
 ```{r}
