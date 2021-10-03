@@ -1,0 +1,117 @@
+---
+title: "Mathematical Methods for Artificial Intelligence Lab 2"
+author: "Vytautas Kraujalis"
+date: '2021-10-03'
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+# Reading Data
+```{r}
+set.seed(123)
+
+data <- read.csv("water_potability.csv")
+```
+
+# Required packages
+```{r}
+library(SmartEDA)
+library(dplyr)
+library(ggplot2)
+library(mice)
+library(VIM)
+library(glmnet)
+library(caret)
+```
+
+# EDA, first look at the dataset
+```{r}
+ExpData(data,type=1)
+```
+
+We can see, that we have 10 numerical variables and 3276 observations, we can also notice, that 3 variables have missing variables.
+
+```{r}
+summary(data)
+```
+
+Variables "ph", "Sulfate" and "Trihalomethanes" have missing values. 
+
+
+Let's look how our missing values are distributed:
+
+
+
+```{r}
+aggr(data, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+```
+
+Out of `r nrow(data)` observations we have 61% of observations without any missing value. 19% of observations have only one missing variable. Variable "ph" contains almost 15% of missing values, while "Sulfate" has almost 24% of missing values, this may cause problems. "Trihalomethanes" has less than <5% of missing values.
+
+We are going to use "mice" package for missing values imputation.
+```{r}
+imp <- mice(data)
+
+summary(imp)
+```
+
+```{r}
+data_noMissing <- complete(imp, 1)
+
+xyplot(imp,Potability ~ ph+Sulfate+Trihalomethanes,pch=18,cex=1)
+
+densityplot(imp)
+
+```
+
+The scatter plot of imputed data (red) and observed values (blue) shows that we did not produced any outliers. Density plots also shows no bad variation of imputed data.
+
+# Pre-process
+## Data split
+```{r}
+indices <- createDataPartition(data_noMissing$Potability, p = 0.8, list = FALSE)
+train <- data_noMissing[indices,]
+test <- data_noMissing[-indices,]
+
+label_index <- which(colnames(train) == "Potability")
+```
+
+Splitted a dataset by 80% / 20% rule. Created a training dataset with `r nrow(train)` (`r nrow(train)/nrow(data)*100`%) observations and testing dataset with `r nrow(test)` (`r nrow(test)/nrow(data)*100`%) observations.
+
+
+# Logistic Regression
+```{r}
+fit_glm_cv = cv.glmnet(as.matrix(train[, -label_index]), train[, label_index], family = "binomial", type.measure = "auc", keep = T, nfolds = 10)
+plot(fit_glm_cv)
+grid()
+```
+
+At first glance, our model on the training set does not perform well. Let's take the best result and run a logistic regression again
+
+```{r}
+
+pred <- predict(fit_glm, test[, -label_index],type="class")
+```
+Using fitted logistic regression model on the testing dataset:
+```{r}
+fit_glm = glmnet(as.matrix(train[, -label_index]), train[, label_index], family = "binomial", lambda=fit_glm_cv$lambda.min)
+test_glm <- predict(fit_glm, as.matrix(test[, -label_index]), type = "class")
+confusionMatrix(as.factor(test_glm),as.factor(test$Potability),mode="everything")
+```
+
+```{r}
+plot(roc.glmnet(fit_glm, newx = as.matrix(test[, -label_index]), newy=test$Potability),type="l")
+```
+
+```{r}
+rocs <- roc.glmnet(fit_glm_cv$fit.preval, newy = test$Potability)
+best <- cvfit$index["min",]
+plot(rocs[[best]], type = "l")
+invisible(sapply(rocs, lines, col="grey"))
+lines(rocs[[best]], lwd = 2,col = "red")
+```
+
