@@ -26,6 +26,7 @@ library(mice)
 library(VIM)
 library(glmnet)
 library(caret)
+library(pROC)
 ```
 
 # EDA, first look at the dataset
@@ -92,26 +93,55 @@ grid()
 
 At first glance, our model on the training set does not perform well. Let's take the best result and run a logistic regression again
 
-```{r}
-
-pred <- predict(fit_glm, test[, -label_index],type="class")
-```
 Using fitted logistic regression model on the testing dataset:
 ```{r}
 fit_glm = glmnet(as.matrix(train[, -label_index]), train[, label_index], family = "binomial", lambda=fit_glm_cv$lambda.min)
 test_glm <- predict(fit_glm, as.matrix(test[, -label_index]), type = "class")
 confusionMatrix(as.factor(test_glm),as.factor(test$Potability),mode="everything")
+
+temp <- confusionMatrix(as.factor(test_glm),as.factor(test$Potability),mode="everything")
 ```
 
+The overall accuracy is 62%, but the No Information Rate is 0.63. We can see from the confusion table and from the NIR, that our model poorly predicts one class. 
+
+Let's check the ROC curves:
 ```{r}
-plot(roc.glmnet(fit_glm, newx = as.matrix(test[, -label_index]), newy=test$Potability),type="l")
+roc_glm <- roc.glmnet(fit_glm, newx = as.matrix(test[, -label_index]), newy=test$Potability)
+ggplot(roc_glm, aes(x = FPR, y = TPR)) +
+   geom_line() +
+   geom_abline(slope = 1, color = "red", size = 1) +
+   theme_minimal()
+
+test_glm_response <- predict(fit_glm, as.matrix(test[, -label_index]),type="response")
+auc(roc(test$Potability ~ test_glm_response))
 ```
 
+The AUC is 0.53, so our model is as good as a random guess.
+
 ```{r}
-rocs <- roc.glmnet(fit_glm_cv$fit.preval, newy = test$Potability)
-best <- cvfit$index["min",]
-plot(rocs[[best]], type = "l")
-invisible(sapply(rocs, lines, col="grey"))
-lines(rocs[[best]], lwd = 2,col = "red")
+formula <- as.formula(paste(' ~ .^2 + ',paste('poly(',colnames(train[, -label_index]),',2, raw=TRUE)[, 2]',collapse = ' + ')))
+
+temp <- as.data.frame(model.matrix(formula, data=train[, -label_index]))
+temp2 <- temp[, 2:ncol(temp)] %>% 
+   bind_cols(Potability = train$Potability)
+temp_label_index <- which(colnames(temp2) == "Potability")
+
+temp_test <- as.data.frame(model.matrix(formula, data=test[, -label_index]))
+temp2_test <- temp_test[, 2:ncol(temp_test)] %>% 
+   bind_cols(Potability = test$Potability)
+
+temp_fit_glm_cv = cv.glmnet(as.matrix(temp2[, -temp_label_index]), temp2[, temp_label_index], family = "binomial", type.measure = "auc", keep = T, nfolds = 10)
+plot(temp_fit_glm_cv)
+grid()
+
+
+
+
+temp_fit_glm = glmnet(as.matrix(temp2[, -temp_label_index]), temp2[, temp_label_index], family = "binomial", lambda=temp_fit_glm_cv$lambda.min)
+temp_test_glm <- predict(temp_fit_glm, as.matrix(temp2_test[, -temp_label_index]), type = "class")
+confusionMatrix(as.factor(temp_test_glm),as.factor(test$Potability),mode="everything")
+
+temp <- confusionMatrix(as.factor(test_glm),as.factor(test$Potability),mode="everything")
+
 ```
 
