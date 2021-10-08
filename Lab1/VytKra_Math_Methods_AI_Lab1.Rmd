@@ -1,6 +1,12 @@
 ---
 title: "VytKra Mathematical Methods for Artificial Intelligence Lab 1"
-output: word_document
+output: 
+  html_document:
+    toc: true 
+    toc_depth: 2
+    number_sections: true
+    theme: united
+    highlight: tango
 ---
 
 ```{r setup, include=FALSE}
@@ -22,7 +28,7 @@ library(purrr)
 library(ggplot2)
 library(corrplot)
 library(caret)
-library(randomForest)
+library(glmnet)
 ```
 
 # EDA, first look at the dataset
@@ -32,6 +38,7 @@ ExpData(data,type=1)
 
 We have 168 numeric variables and only 1 text variable, no missing values. There are 9 columns with zero variance, we'll look at it later.
 
+
 Let's look at the text variable:
 ```{r}
 head(data$material)
@@ -39,6 +46,7 @@ head(data$material)
 
 Out of total `r nrow(data)` observations, we have `r n_distinct(data %>% select(material))` unique record in this text column.
 We won't be using this variable in our analysis.
+
 
 We should look at the variables with zero variance:
 ```{r}
@@ -122,10 +130,11 @@ test_transformed <- predict(preProcValues, test)
 
 label_index <- which(colnames(train_transformed) == "critical_temp")
 ```
+
 We also centered and scaled our data. We transformed the testing dataset based on the pre process of training dataset.
 
-# ML algorithms
-## Linear Regression
+# Linear Regression
+## Linear Regression - no changes in data
 ```{r}
 # linear regression
 train_control_cv <- trainControl(method = "cv", number = 10)
@@ -138,12 +147,15 @@ The model:
 print(fit_lm)
 ```
 
+Our RMSE = `r round(fit_lm$results$RMSE, 2)`, R^2 = `r round(fit_lm$results$Rsquared * 100, 0)`%, MAE = `r round(fit_lm$results$MAE, 2)`
+
+
 Using fitted linear regression model on the testing dataset:
 ```{r}
 test_lm <- predict(fit_lm, newdata = test_transformed)
 print(round(postResample(pred = test_lm, obs = test_transformed$critical_temp), 3))
 ```
-Our model, on the testing dataset, only explains ~30% of variance, while on a training set the rsquared was 72%. But the MAE was 0.36 for the training set and 0.38 for the testing dataset, it could mean an outlier influences the RMSE and rqsuared.
+Our model, on the testing dataset, only explains ~31% of variance, while on a training set the rsquared was 72%. But the MAE was 0.36 for the training set and 0.38 for the testing dataset, it could mean an outlier influences the RMSE and rqsuared.
 
 Let's look at the fitted vs actual plot:
 ```{r}
@@ -159,9 +171,11 @@ ggplot(fitted_actual_lm,
               size = 2) +
   theme_minimal()
 ```
+
 We clearly see one value, with an actual value of ~-0.5, while the fitted value is ~-70.
 
-Let's look at that observation before transformation:
+
+Let's look at that observation before transformation was applied:
 ```{r}
 test[test_lm < -60,] %>% 
   tidyr::pivot_longer(cols = everything())
@@ -179,12 +193,14 @@ ggplot(fitted_actual_lm %>% filter(fitted > -60),
   geom_abline(intercept = 0,
               slope = 1,
               color = "red",
-              size = 2)
+              size = 2) +
+  theme_minimal()
 ```
-Our rsquared would be 76%.
+
+Our rsquared would be 76%, the MAE is 0.36 which is a reasonable result.
 
 
-## Linear Regression with removed correlated variables
+## Linear Regression - removed correlated columns
 ```{r}
 # Removed >.9 correlations
 correlation_matrix = cor(train_transformed)
@@ -203,15 +219,18 @@ fit_lm_no_correlated <- train(critical_temp ~ ., data = train_transformed_no_cor
 ```
 
 Performing Linear Regression with 10 fold cross-validation
-`r print(fit_lm_no_correlated)`
-We see, that our rsquared on training dataset dropped to 69%.
+```{r}
+print(fit_lm_no_correlated)
+```
+
+We see, that our rsquared on training dataset dropped to 70% and MAE increased to 0.38.
 
 Testing on a test dataset
 ```{r}
 test_lm_noCorr <- predict(fit_lm_no_correlated, newdata = test_transformed[, -c(correlated_columns, label_index)])
 round(postResample(pred = test_lm_noCorr, obs = test_transformed$critical_temp), 3)
 ```
-Rsquared on the testing dataset is 41%, we see similar results with MAE, let's look at the plot
+Rsquared on the testing dataset is 42% while MAE is 0.39 and RMSE = 0.93, let's look at the plot
 
 
 ```{r}
@@ -227,12 +246,36 @@ ggplot(fitted_actual_lm_noCorr,
               size = 2) +
   theme_minimal()
 ```
-Same result with that one outlier, let's try without it:
 
+Same result with that one outlier.
+
+## Ridge Linear Regression
 ```{r}
-round(postResample(pred = test_lm_noCorr[test_lm_noCorr > -50], obs = test_transformed$critical_temp[test_lm_noCorr > -50]), 3)
+fit_lmridge_cv = cv.glmnet(as.matrix(train_transformed[, -label_index]), train_transformed[, label_index], alpha = 0, nfolds = 10, family = 'gaussian')
+plot(fit_lmridge_cv)
+grid()
+```
 
-ggplot(fitted_actual_lm_noCorr %>% filter(fitted > -50),                                     
+Best minimum lambda is:
+```{r}
+fit_lmridge_cv$lambda.min
+```
+
+Let's fit a Ridge Linear Regression using best minimum lambda:
+```{r}
+fit_lmridge = glmnet(as.matrix(train_transformed[, -label_index]), train_transformed[, label_index], lambda = fit_lmridge_cv$lambda.min)
+test_lmridge <- predict(fit_lmridge, as.matrix(test_transformed[, -label_index]))
+round(postResample(pred = test_lmridge, obs = test_transformed$critical_temp), 3)
+```
+
+Using Ridge Linear Regression we obtained 54% Rsquared, 0.67 MAE and 0.8 RMSE on testing dataset.
+
+Let's plot fitted vs actual values:
+```{r}
+fitted_actual_lmridge <- data.frame(fitted = test_lmridge, actual = test_transformed$critical_temp) %>% 
+  rename(fitted = s0)
+
+ggplot(fitted_actual_lmridge,                                     
        aes(x = fitted,
            y = actual)) +
   geom_point() +
@@ -242,29 +285,36 @@ ggplot(fitted_actual_lm_noCorr %>% filter(fitted > -50),
               size = 2) +
   theme_minimal()
 ```
-The rsquared increased to 74%. Slightly worse than using all variables.
 
-# Random Forest
-Out of curiosity, let's try a simple random forest model to see how it fits our data.
+Our Ridge Linear Regression model does not look like a good prediction model.
+
+## Lasso Linear Regression
 ```{r}
-fit_rf <- randomForest(x = train_transformed[, -label_index], y = train_transformed[, label_index], ntree = 150, do.trace = T)
+fit_lasso_cv = cv.glmnet(as.matrix(train_transformed[, -label_index]), train_transformed[, label_index], alpha = 1, nfolds = 10, family = 'gaussian')
+plot(fit_lasso_cv)
+grid()
 ```
+
+Best minimum lambda is:
 ```{r}
-print(fit_rf)
+fit_lasso_cv$lambda.min
 ```
-Our random forest model on training dataset explains almost 93% or variance, let's try on a test dataset
+
+Let's fit a Lasso Linear Regression using best minimum lambda:
 ```{r}
-test_rf = predict(fit_rf, newdata = test_transformed[, -label_index])
-round(postResample(pred = test_rf, obs = test_transformed$critical_temp), 3)
+fit_lasso = glmnet(as.matrix(train_transformed[, -label_index]), train_transformed[, label_index], lambda = fit_lasso_cv$lambda.min)
+test_lasso <- predict(fit_lasso, as.matrix(test_transformed[, -label_index]))
+round(postResample(pred = test_lasso, obs = test_transformed$critical_temp), 3)
 ```
-Rsquared on a test dataset is 93%, good results. :)
 
+Using Lasso Linear Regression we obtained 37% Rsquared, 0.41 MAE and 0.94 RMSE on testing dataset.
 
-
+Let's plot fitted vs actual values:
 ```{r}
-fitted_actual_rf <- data.frame(fitted = test_rf, actual = test_transformed$critical_temp)
+fitted_actual_lasso <- data.frame(fitted = test_lasso, actual = test_transformed$critical_temp) %>% 
+  rename(fitted = s0)
 
-ggplot(fitted_actual_rf,                                     
+ggplot(fitted_actual_lasso,                                     
        aes(x = fitted,
            y = actual)) +
   geom_point() +
@@ -274,3 +324,57 @@ ggplot(fitted_actual_rf,
               size = 2) +
   theme_minimal()
 ```
+
+We see the same predicted outlier
+
+## Elastic Net Regression
+```{r}
+fit_elasticNet <- train(critical_temp ~ ., data = train_transformed, method = "glmnet", trControl = train_control_cv, tuneLength = 10)
+
+print(fit_elasticNet)
+```
+
+Best parameters:
+```{r}
+fit_elasticNet$bestTune
+```
+
+Testing on a test dataset
+```{r}
+test_elasticNet <- predict(fit_elasticNet, newdata = test_transformed[, -label_index])
+round(postResample(pred = test_elasticNet, obs = test_transformed$critical_temp), 3)
+```
+Rsquared on the testing dataset is 37% while MAE is 0.41 and RMSE = 0.95, let's look at the plot
+
+
+```{r}
+fitted_actual_elasticNet <- data.frame(fitted = test_elasticNet, actual = test_transformed$critical_temp)
+
+ggplot(fitted_actual_elasticNet,                                     
+       aes(x = fitted,
+           y = actual)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  theme_minimal()
+```
+
+# Conclusion
+```{r}
+models <- t(data.frame(
+  `Linear Regression` = round(postResample(pred = test_lm, obs = test_transformed$critical_temp), 3),
+  `Linear Regression Without Correlated Columns` = round(postResample(pred = test_lm_noCorr, obs = test_transformed$critical_temp), 3),
+  `RIDGE` = round(postResample(pred = test_lmridge, obs = test_transformed$critical_temp), 3),
+  `LASSO` = round(postResample(pred = test_lasso, obs = test_transformed$critical_temp), 3),
+  `Elastic Net Regression` = round(postResample(pred = test_elasticNet, obs = test_transformed$critical_temp), 3)
+))
+
+print(models)
+```
+
+The best result was achieved using RIDGE linear regression, while the MAE of Ridge is the highest, Ridge method did not produced outlier prediction, unlike other methods.
+
+
+
