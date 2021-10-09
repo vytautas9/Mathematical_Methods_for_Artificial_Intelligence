@@ -1,5 +1,7 @@
 ---
-title: "VytKra Mathematical Methods for Artificial Intelligence Lab 1"
+title: "Mathematical Methods for Artificial Intelligence Lab 1"
+author: "Vytautas Kraujalis"
+date: '2021-10-03'
 output: 
   html_document:
     toc: true 
