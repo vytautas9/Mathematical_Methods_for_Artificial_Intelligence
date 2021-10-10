@@ -1,0 +1,658 @@
+---
+title: "Mathematical Methods for Artificial Intelligence Lab 1 and 2"
+author: "Vytautas Kraujalis"
+date: '2021-10-10'
+output: 
+  pdf_document:
+    toc: true 
+    toc_depth: 3
+    number_sections: true
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Lab 1
+## Reading Data
+```{r}
+set.seed(123)
+
+data <- read.csv("superconductor_dataset.csv")
+```
+
+## Required packages
+```{r}
+library(SmartEDA)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(corrplot)
+library(caret)
+library(glmnet)
+```
+
+## EDA, first look at the dataset
+```{r}
+ExpData(data,type=1)
+```
+
+We have 168 numeric variables and only 1 text variable, no missing values. There are 9 columns with zero variance, we'll look at it later.
+
+
+Let's look at the text variable:
+```{r}
+head(data$material)
+```
+
+Out of total `r nrow(data)` observations, we have `r n_distinct(data %>% select(material))` unique record in this text column.
+We won't be using this variable in our analysis.
+
+
+We should look at the variables with zero variance:
+```{r}
+data <- data %>% select(-material)
+
+# Return a character vector of variable names which have 0 variance
+variables_with_zero_var <- names(data)[which(map_dbl(data, var) == 0)]
+
+summary(data[,variables_with_zero_var])
+
+data <- data %>% select(-all_of(variables_with_zero_var))
+```
+Those 9 variables have zero variance, we'll exclude them
+
+We should look into our target variable - critical_temp
+```{r}
+summary( data %>% select(critical_temp) )
+```
+We see a maximum value of critical_temp to be 185, while 3rd Quantile - 63. Let's look at the boxplot:
+```{r}
+ggplot(data, aes(x=critical_temp)) +
+  geom_boxplot() +
+  theme_minimal()
+```
+
+Seems like we have one outlier at >150. We will remove this observation
+```{r}
+data <- data %>% filter(critical_temp < 150)
+```
+
+
+Let's look at descriptive statistics of each variable:
+```{r}
+ExpNumStat(data,by ="A",round= 2, gp = "critical_temp") %>% 
+  select(Vname, min, max, mean, median, SD)
+```
+
+We should look at the correlation between variables
+```{r}
+# Correlation
+
+corr_simple <- function(df,sig=0.5){
+  corr <- cor(df)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > sig) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  return(corr)
+}
+
+correlation_matrix = cor(data)
+
+length(findCorrelation(correlation_matrix, cutoff = 0.99))
+length(findCorrelation(correlation_matrix, cutoff = 0.95))
+length(findCorrelation(correlation_matrix, cutoff = 0.9))
+```
+
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.99))` variables with higher than .99 correlation.
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.95))` variables with higher than .95 correlation.
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.9))` variables with higher than .9 correlation.
+
+## Pre-process
+### Data split
+```{r}
+indices <- createDataPartition(data$critical_temp, p = 0.8, list = FALSE)
+train <- data[indices,]
+test <- data[-indices,]
+```
+
+Splitted a dataset by 80% / 20% rule. Created a training dataset with `r nrow(train)` (`r nrow(train)/nrow(data)*100`%) observations and testing dataset with `r nrow(test)` (`r nrow(test)/nrow(data)*100`%) observations.
+
+### Data transformation
+```{r}
+preProcValues <- preProcess(train, method = c("center", "scale"))
+train_transformed <- predict(preProcValues, train)
+test_transformed <- predict(preProcValues, test)
+
+label_index <- which(colnames(train_transformed) == "critical_temp")
+```
+
+We also centered and scaled our data. We transformed the testing dataset based on the pre process of training dataset.
+
+## Linear Regression
+### Linear Regression - no changes in data
+```{r}
+# linear regression
+train_control_cv <- trainControl(method = "cv", number = 10)
+fit_lm <- train(critical_temp ~ ., data = train_transformed, method = "lm", trControl = train_control_cv)
+```
+
+We are performing linear regression model on the whole training dataset with 10 fold cross-validation.
+The model:
+```{r}
+print(fit_lm)
+```
+
+Our RMSE = `r round(fit_lm$results$RMSE, 2)`, R^2 = `r round(fit_lm$results$Rsquared * 100, 0)`%, MAE = `r round(fit_lm$results$MAE, 2)`
+
+
+Using fitted linear regression model on the testing dataset:
+```{r}
+test_lm <- predict(fit_lm, newdata = test_transformed)
+print(round(postResample(pred = test_lm, obs = test_transformed$critical_temp), 3))
+```
+Our model, on the testing dataset, only explains ~31% of variance, while on a training set the rsquared was 72%. But the MAE was 0.36 for the training set and 0.38 for the testing dataset, it could mean an outlier influences the RMSE and rqsuared.
+
+Let's look at the fitted vs actual plot:
+```{r}
+fitted_actual_lm <- data.frame(fitted = test_lm, actual = test_transformed$critical_temp)
+
+ggplot(fitted_actual_lm,                                     
+       aes(x = fitted,
+           y = actual)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  theme_minimal()
+```
+
+We clearly see one value, with an actual value of ~-0.5, while the fitted value is ~-70.
+
+
+Let's look at that observation before transformation was applied:
+```{r}
+test[test_lm < -60,] %>% 
+  tidyr::pivot_longer(cols = everything())
+```
+
+If we would exclude this observation from our testing dataset:
+```{r}
+# without the outlier
+print(round(postResample(pred = test_lm[test_lm > -60], obs = test_transformed$critical_temp[test_lm > -60]), 3))
+
+ggplot(fitted_actual_lm %>% filter(fitted > -60),                                     
+       aes(x = fitted,
+           y = actual)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  theme_minimal()
+```
+
+Our rsquared would be 76%, the MAE is 0.36 which is a reasonable result.
+
+
+### Linear Regression - removed correlated columns
+```{r}
+# Removed >.9 correlations
+correlation_matrix = cor(train_transformed)
+correlated_columns = findCorrelation(correlation_matrix, cutoff = 0.9)
+correlated_columns = sort(correlated_columns)
+
+colnames(train_transformed[, correlated_columns])
+```
+We are going to remove these columns from our training dataset, those columns have >.9 correlation
+
+
+```{r}
+train_transformed_no_correlated = train_transformed[,-c(correlated_columns)]
+label_index_noCorr <- which(colnames(train_transformed_no_correlated) == "critical_temp")
+fit_lm_no_correlated <- train(critical_temp ~ ., data = train_transformed_no_correlated, method = "lm", trControl = train_control_cv)
+```
+
+Performing Linear Regression with 10 fold cross-validation
+```{r}
+print(fit_lm_no_correlated)
+```
+
+We see, that our rsquared on training dataset dropped to 70% and MAE increased to 0.38.
+
+Testing on a test dataset
+```{r}
+test_lm_noCorr <- predict(fit_lm_no_correlated, newdata = test_transformed[, -c(correlated_columns, label_index)])
+round(postResample(pred = test_lm_noCorr, obs = test_transformed$critical_temp), 3)
+```
+Rsquared on the testing dataset is 42% while MAE is 0.39 and RMSE = 0.93, let's look at the plot
+
+
+```{r}
+fitted_actual_lm_noCorr <- data.frame(fitted = test_lm_noCorr, actual = test_transformed$critical_temp)
+
+ggplot(fitted_actual_lm_noCorr,                                     
+       aes(x = fitted,
+           y = actual)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  theme_minimal()
+```
+
+Same result with that one outlier.
+
+### Ridge Linear Regression
+```{r}
+fit_lmridge_cv = cv.glmnet(as.matrix(train_transformed[, -label_index]), train_transformed[, label_index], alpha = 0, nfolds = 10, family = 'gaussian')
+plot(fit_lmridge_cv)
+grid()
+```
+
+Best minimum lambda is:
+```{r}
+fit_lmridge_cv$lambda.min
+```
+
+Let's fit a Ridge Linear Regression using best minimum lambda:
+```{r}
+fit_lmridge = glmnet(as.matrix(train_transformed[, -label_index]), train_transformed[, label_index], lambda = fit_lmridge_cv$lambda.min)
+test_lmridge <- predict(fit_lmridge, as.matrix(test_transformed[, -label_index]))
+round(postResample(pred = test_lmridge, obs = test_transformed$critical_temp), 3)
+```
+
+Using Ridge Linear Regression we obtained 54% Rsquared, 0.67 MAE and 0.8 RMSE on testing dataset.
+
+Let's plot fitted vs actual values:
+```{r}
+fitted_actual_lmridge <- data.frame(fitted = test_lmridge, actual = test_transformed$critical_temp) %>% 
+  rename(fitted = s0)
+
+ggplot(fitted_actual_lmridge,                                     
+       aes(x = fitted,
+           y = actual)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  theme_minimal()
+```
+
+While our model is better at predicting than a random guess, but the model is not that great when you look at the graph.
+
+### Lasso Linear Regression
+```{r}
+fit_lasso_cv = cv.glmnet(as.matrix(train_transformed[, -label_index]), train_transformed[, label_index], alpha = 1, nfolds = 10, family = 'gaussian')
+plot(fit_lasso_cv)
+grid()
+```
+
+Best minimum lambda is:
+```{r}
+fit_lasso_cv$lambda.min
+```
+
+Let's fit a Lasso Linear Regression using best minimum lambda:
+```{r}
+fit_lasso = glmnet(as.matrix(train_transformed[, -label_index]), train_transformed[, label_index], lambda = fit_lasso_cv$lambda.min)
+test_lasso <- predict(fit_lasso, as.matrix(test_transformed[, -label_index]))
+round(postResample(pred = test_lasso, obs = test_transformed$critical_temp), 3)
+```
+
+Using Lasso Linear Regression we obtained 37% Rsquared, 0.41 MAE and 0.94 RMSE on testing dataset.
+
+Let's plot fitted vs actual values:
+```{r}
+fitted_actual_lasso <- data.frame(fitted = test_lasso, actual = test_transformed$critical_temp) %>% 
+  rename(fitted = s0)
+
+ggplot(fitted_actual_lasso,                                     
+       aes(x = fitted,
+           y = actual)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  theme_minimal()
+```
+
+We see the same predicted outlier
+
+### Elastic Net Regression
+```{r}
+fit_elasticNet <- train(critical_temp ~ ., data = train_transformed, method = "glmnet", trControl = train_control_cv, tuneLength = 10)
+
+print(fit_elasticNet)
+```
+
+Best parameters:
+```{r}
+fit_elasticNet$bestTune
+```
+
+Testing on a test dataset
+```{r}
+test_elasticNet <- predict(fit_elasticNet, newdata = test_transformed[, -label_index])
+round(postResample(pred = test_elasticNet, obs = test_transformed$critical_temp), 3)
+```
+Rsquared on the testing dataset is 37% while MAE is 0.41 and RMSE = 0.95, let's look at the plot
+
+
+```{r}
+fitted_actual_elasticNet <- data.frame(fitted = test_elasticNet, actual = test_transformed$critical_temp)
+
+ggplot(fitted_actual_elasticNet,                                     
+       aes(x = fitted,
+           y = actual)) +
+  geom_point() +
+  geom_abline(intercept = 0,
+              slope = 1,
+              color = "red",
+              size = 2) +
+  theme_minimal()
+```
+
+## Lab 1 Conclusion
+```{r}
+models <- t(data.frame(
+  `Linear Regression` = round(postResample(pred = test_lm, obs = test_transformed$critical_temp), 3),
+  `Linear Regression Without Correlated Columns` = round(postResample(pred = test_lm_noCorr, obs = test_transformed$critical_temp), 3),
+  `RIDGE` = round(postResample(pred = test_lmridge, obs = test_transformed$critical_temp), 3),
+  `LASSO` = round(postResample(pred = test_lasso, obs = test_transformed$critical_temp), 3),
+  `Elastic Net Regression` = round(postResample(pred = test_elasticNet, obs = test_transformed$critical_temp), 3)
+))
+
+print(models)
+```
+
+The best result was achieved using RIDGE linear regression, while the MAE of Ridge is the highest. While the Ridge method gave the best result, but the model itself is not that great when you look at the graph, anyways, using Ridge method we did not predicted any outlier, unlike other methods.
+
+--------------------------------------------------------------------------------------------------------
+# Lab 2
+## Reading Data
+```{r}
+set.seed(123)
+
+data <- read.csv("water_potability.csv")
+```
+
+## Required packages
+```{r}
+library(SmartEDA)
+library(dplyr)
+library(ggplot2)
+library(mice)
+library(VIM)
+library(glmnet)
+library(caret)
+library(ROCR)
+
+# Function for binary class accuracy from confusion matrix
+classAcc <- function(confusionMatrix) {
+  class0 <- round(confusionMatrix$table[1, 1] / sum(confusionMatrix$table[, 1]) * 100, 1)
+  class1 <- round(confusionMatrix$table[2, 2] / sum(confusionMatrix$table[, 2]) * 100, 1)
+  acc <- c(class0, class1)
+  names(acc) <- c("Acc: 0", "Acc: 1")
+  return(acc)
+}
+```
+
+## EDA, first look at the dataset
+```{r}
+ExpData(data, type = 1)
+```
+
+We can see, that we have 10 numerical variables and 3276 observations, we can also notice, that 3 variables have missing variables.
+
+```{r}
+summary(data)
+```
+
+Variables "ph", "Sulfate" and "Trihalomethanes" have missing values. 
+
+
+Let's look how our missing values are distributed:
+
+
+
+```{r}
+aggr(data, col = c("navyblue", "red"), numbers = TRUE, sortVars = TRUE, labels = names(data), cex.axis = .7, gap = 3, ylab = c("Histogram of missing data", "Pattern"))
+```
+
+Out of `r nrow(data)` observations we have 61% of observations without any missing value. 19% of observations have only one missing variable. Variable "ph" contains almost 15% of missing values, while "Sulfate" has almost 24% of missing values, this may cause problems. "Trihalomethanes" has less than <5% of missing values.
+
+We are going to use "mice" package for missing values imputation.
+```{r}
+imp <- mice(data)
+
+summary(imp)
+```
+
+```{r}
+data_noMissing <- complete(imp, 1)
+
+xyplot(imp, Potability ~ ph + Sulfate + Trihalomethanes, pch = 18, cex = 1)
+
+densityplot(imp)
+```
+
+The scatter plot of imputed data (red) and observed values (blue) shows that we did not produced any outliers. Density plots also shows no bad variation of imputed data.
+
+## Pre-process
+### Data split
+```{r}
+indices <- createDataPartition(data_noMissing$Potability, p = 0.8, list = FALSE)
+train <- data_noMissing[indices, ]
+test <- data_noMissing[-indices, ]
+
+label_index <- which(colnames(train) == "Potability")
+```
+
+Splitted a dataset by 80% / 20% rule. Created a training dataset with `r nrow(train)` (`r nrow(train)/nrow(data)*100`%) observations and testing dataset with `r nrow(test)` (`r nrow(test)/nrow(data)*100`%) observations.
+
+### Data transformation
+```{r}
+preProcValues <- preProcess(train[, -label_index], method = c("center", "scale"))
+train[, -label_index] <- predict(preProcValues, train[, -label_index])
+test[, -label_index] <- predict(preProcValues, test[, -label_index])
+```
+
+We also centered and scaled our data. We transformed the testing dataset based on the pre process of training dataset.
+
+## Logistic Regression
+### Simple Logistic Regression
+```{r}
+fit_glm_cv <- cv.glmnet(as.matrix(train[, -label_index]), train[, label_index], family = "binomial", type.measure = "auc", keep = T, nfolds = 10)
+plot(fit_glm_cv)
+grid()
+```
+
+Best lambda:
+```{r}
+fit_glm_cv$lambda.min
+```
+
+
+At first glance, our model on the training set does not perform well. Let's take the best result and run a logistic regression again
+
+Using fitted logistic regression model on the testing dataset:
+```{r}
+fit_glm <- glmnet(as.matrix(train[, -label_index]), train[, label_index], family = "binomial", lambda = fit_glm_cv$lambda.min)
+test_glm <- predict(fit_glm, as.matrix(test[, -label_index]), type = "class")
+confusionMatrix <- confusionMatrix(as.factor(test_glm), as.factor(test$Potability), mode = "everything")
+print(confusionMatrix)
+print(classAcc(confusionMatrix))
+```
+
+The overall accuracy is 63%, but the No Information Rate is 0.63. We can see from the confusion table and from the NIR, that our model poorly predicts one class. Class "1" has 0% accuracy 
+
+Let's check the ROC curves:
+```{r}
+prob_glm <- predict(fit_glm, as.matrix(test[, -label_index]), type = "response", s = fit_glm$lambda)
+pred_glm <- prediction(prob_glm, test[, label_index])
+perf_glm <- performance(pred_glm, measure = "tpr", x.measure = "fpr")
+
+# area under the curve
+auc <- attr(performance(pred_glm, "auc"), "y.values")[[1]]
+auc <- round(auc, digits = 3)
+
+roc_glm <- data.frame(fpr = attr(perf_glm, "x.values")[[1]], tpr = attr(perf_glm, "y.values")[[1]])
+
+ggplot(roc_glm, aes(x = fpr, ymin = 0, ymax = tpr)) +
+  geom_ribbon(alpha = 0.2) +
+  geom_line(aes(y = tpr)) +
+  ggtitle(paste0("ROC Curve, AUC = ", auc)) +
+  geom_abline(slope = 1, color = "red", size = 1) +
+  theme_minimal()
+```
+
+The AUC is 0.465, so our model is even worse than a random guess.
+
+### Logistic Regression with interactions
+
+Let's try to add interactions between variables to see if that could lead to a better prediction.
+```{r}
+formula <- as.formula(" ~ .^2")
+
+# We add interactions of our primary variables
+train_int <- model.matrix(formula, data = train[, -label_index])
+train_int <- train_int[, 2:ncol(train_int)] %>%
+  bind_cols(Potability = train$Potability) %>%
+  as.matrix()
+train_int_label_index <- which(colnames(train_int) == "Potability")
+
+test_int <- model.matrix(formula, data = test[, -label_index])
+test_int <- test_int[, 2:ncol(test_int)] %>%
+  bind_cols(Potability = test$Potability) %>%
+  as.matrix()
+
+fit_glm_cv_int <- cv.glmnet(train_int[, -train_int_label_index], train_int[, train_int_label_index], family = "binomial", type.measure = "auc", keep = T, nfolds = 10)
+plot(fit_glm_cv_int)
+grid()
+```
+
+Best lambda:
+```{r}
+fit_glm_cv_int$lambda.min
+```
+
+The addition of interactions seems to give a better result, let's try the fitted model on a test dataset:
+
+```{r}
+fit_glm_int <- glmnet(train_int[, -train_int_label_index], train_int[, train_int_label_index], family = "binomial", lambda = fit_glm_cv_int$lambda.min)
+test_glm_int <- predict(fit_glm_int, test_int[, -train_int_label_index], type = "class")
+confusionMatrix <- confusionMatrix(as.factor(test_glm_int), as.factor(test_int[, train_int_label_index]), mode = "everything")
+print(confusionMatrix)
+print(classAcc(confusionMatrix))
+```
+
+The overall accuracy is 68%, but now, the addition of interactions between variables led to 18% accuracy of the "1" class, while the accuracy for class "0" only dropped to 97%.
+
+Let's check the ROC curves:
+```{r}
+prob_glm_int <- predict(fit_glm_int, test_int[, -train_int_label_index], type = "response", s = fit_glm_int$lambda)
+pred_glm_int <- prediction(prob_glm_int, test_int[, train_int_label_index])
+perf_glm_int <- performance(pred_glm_int, measure = "tpr", x.measure = "fpr")
+
+# area under the curve
+auc <- attr(performance(pred_glm_int, "auc"), "y.values")[[1]]
+auc <- round(auc, digits = 3)
+
+roc_glm_int <- data.frame(fpr = attr(perf_glm_int, "x.values")[[1]], tpr = attr(perf_glm_int, "y.values")[[1]])
+
+ggplot(roc_glm_int, aes(x = fpr, ymin = 0, ymax = tpr)) +
+  geom_ribbon(alpha = 0.2) +
+  geom_line(aes(y = tpr)) +
+  ggtitle(paste0("ROC Curve, AUC = ", auc)) +
+  geom_abline(slope = 1, color = "red", size = 1) +
+  theme_minimal()
+```
+
+This time, the AUC is 0.692 and our model looks better than a random guess.
+
+### Logistic Regression with interactions and 2nd order polynomials
+
+Interactions seemed to help in prediction, now let's try to add 2nd order polynomials of variables.
+```{r}
+formula <- as.formula(paste(" ~ .^2 + ", paste("poly(", colnames(train[, -label_index]), ",2, raw=TRUE)[, 2]", collapse = " + ")))
+
+# We add interactions of our primary variables
+train_int_pol2 <- model.matrix(formula, data = train[, -label_index])
+train_int_pol2 <- train_int_pol2[, 2:ncol(train_int_pol2)] %>%
+  bind_cols(Potability = train$Potability) %>%
+  as.matrix()
+train_int_pol2_label_index <- which(colnames(train_int_pol2) == "Potability")
+
+test_int_pol2 <- model.matrix(formula, data = test[, -label_index])
+test_int_pol2 <- test_int_pol2[, 2:ncol(test_int_pol2)] %>%
+  bind_cols(Potability = test$Potability) %>%
+  as.matrix()
+
+fit_glm_cv_int_pol2 <- cv.glmnet(train_int_pol2[, -train_int_pol2_label_index], train_int_pol2[, train_int_pol2_label_index], family = "binomial", type.measure = "auc", keep = T, nfolds = 10)
+plot(fit_glm_cv_int_pol2)
+grid()
+```
+
+Best lambda:
+```{r}
+fit_glm_cv_int_pol2$lambda.min
+```
+
+The addition of interactions and 2nd order polynomials seems to give a slightly better result than just with interactions, let's try the fitted model on a test dataset:
+
+```{r}
+fit_glm_int_pol2 <- glmnet(train_int_pol2[, -train_int_pol2_label_index], train_int_pol2[, train_int_pol2_label_index], family = "binomial", lambda = fit_glm_cv_int_pol2$lambda.min)
+test_glm_int_pol2 <- predict(fit_glm_int_pol2, test_int_pol2[, -train_int_pol2_label_index], type = "class")
+confusionMatrix <- confusionMatrix(as.factor(test_glm_int_pol2), as.factor(test_int_pol2[, train_int_pol2_label_index]), mode = "everything")
+print(confusionMatrix)
+print(classAcc(confusionMatrix))
+```
+
+The overall accuracy is 69%, but now, the addition of interactions between variables and 2nd order polynomials led to 21% accuracy of the "1" class, while the accuracy for class "0" only dropped to 96%.
+
+Let's check the ROC curves:
+```{r}
+prob_glm_int_pol2 <- predict(fit_glm_int_pol2, test_int_pol2[, -train_int_pol2_label_index], type = "response", s = fit_glm_int_pol2$lambda)
+pred_glm_int_pol2 <- prediction(prob_glm_int_pol2, test_int_pol2[, train_int_pol2_label_index])
+perf_glm_int_pol2 <- performance(pred_glm_int_pol2, measure = "tpr", x.measure = "fpr")
+
+# area under the curve
+auc <- attr(performance(pred_glm_int_pol2, "auc"), "y.values")[[1]]
+auc <- round(auc, digits = 3)
+
+roc_glm_int_pol2 <- data.frame(fpr = attr(perf_glm_int_pol2, "x.values")[[1]], tpr = attr(perf_glm_int_pol2, "y.values")[[1]])
+
+ggplot(roc_glm_int_pol2, aes(x = fpr, ymin = 0, ymax = tpr)) +
+  geom_ribbon(alpha = 0.2) +
+  geom_line(aes(y = tpr)) +
+  ggtitle(paste0("ROC Curve, AUC = ", auc)) +
+  geom_abline(slope = 1, color = "red", size = 1) +
+  theme_minimal()
+```
+
+This time, the AUC increased to 0.7. Overall, just a small increase after the interactions.
+
+## Lab 2 Conclusion
+
+A logistic regression with interactions between variables and 2nd order polynomials seemed to give the best prediction. Addition of 2nd order polynomial just slightly increased the AUC and accuracy, so there's no need to try the next order.
+
+Best lambda, obtained from the cross-validation, is `r round(fit_glm_cv_int_pol2$lambda.min, 3)`.
+The overall accuracy on a test dataset is `r round(confusionMatrix$overall[1] , 2)*100`%, while the accurcy for "0" class is `r round(classAcc(confusionMatrix)[1], 2)`% and for class "1" is `r round(classAcc(confusionMatrix)[2], 2)`%. 
+
+The AUC is `r auc`
+

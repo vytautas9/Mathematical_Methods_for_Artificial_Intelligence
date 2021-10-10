@@ -82,8 +82,8 @@ data <- data %>% filter(critical_temp < 150)
 
 Let's look at descriptive statistics of each variable:
 ```{r}
-ExpNumStat(data,by ="A",Outlier=TRUE,round= 2, gp = "critical_temp") %>% 
-  select(Vname, min, max, mean, median, SD, nOutliers)
+ExpNumStat(data,by ="A",round= 2, gp = "critical_temp") %>% 
+  select(Vname, min, max, mean, median, SD)
 ```
 
 We should look at the correlation between variables
@@ -108,6 +108,10 @@ corr_simple <- function(df,sig=0.5){
 }
 
 correlation_matrix = cor(data)
+
+length(findCorrelation(correlation_matrix, cutoff = 0.99))
+length(findCorrelation(correlation_matrix, cutoff = 0.95))
+length(findCorrelation(correlation_matrix, cutoff = 0.9))
 ```
 
 We have `r length(findCorrelation(correlation_matrix, cutoff = 0.99))` variables with higher than .99 correlation.
@@ -288,7 +292,7 @@ ggplot(fitted_actual_lmridge,
   theme_minimal()
 ```
 
-Our Ridge Linear Regression model does not look like a good prediction model.
+While our model is better at predicting than a random guess, but the model is not that great when you look at the graph.
 
 ## Lasso Linear Regression
 ```{r}
@@ -376,7 +380,7 @@ models <- t(data.frame(
 print(models)
 ```
 
-The best result was achieved using RIDGE linear regression, while the MAE of Ridge is the highest, Ridge method did not produced outlier prediction, unlike other methods.
+The best result was achieved using RIDGE linear regression, while the MAE of Ridge is the highest. While the Ridge method gave the best result, but the model itself is not that great when you look at the graph, anyways, using Ridge method we did not predicted any outlier, unlike other methods.
 
 
 
