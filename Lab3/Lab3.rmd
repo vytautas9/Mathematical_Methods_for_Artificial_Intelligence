@@ -1,0 +1,232 @@
+---
+title: "Mathematical Methods for Artificial Intelligence Lab 3"
+author: "Vytautas Kraujalis"
+date: '2021-10-30'
+output: 
+  html_document:
+    toc: true 
+    toc_depth: 3
+    number_sections: true
+    highlight: tango
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Lab 3
+## Reading Data
+```{r}
+set.seed(123)
+
+data_original <- read.csv("Arrhythmia_Dataset.csv")
+```
+
+## Required packages
+```{r}
+library(SmartEDA)
+library(dplyr)
+library(ggplot2)
+library(caret)
+```
+
+## EDA, first look at the dataset
+```{r}
+ExpData(data_original,type=1)
+```
+
+We have a dataset of 175729 observations with 34 variables, of which are 2 text variables and 32 - numerical. All variables have no missing values.
+
+Let's look at the text variables:
+```{r}
+data_original %>% 
+   group_by(record) %>% 
+   summarise(n = n()) %>% 
+   summary()
+```
+
+Our first text variable record has 75 unique values (unique patients). Each patient has on average 2343 observations.
+
+```{r}
+data_original %>% 
+   group_by(type) %>% 
+   summarise(n = n()) %>% 
+   mutate(n_prop = round(n / sum(n) * 100, 2))
+```
+
+The next text variable type is our target variable. It has 5 classes, but there's a huge class imbalance. 2 out of 5 classes takes up to `r 87.38 + 11.38`% of all observations, 1 class has just 6 observations. We are planning to combine F, Q, SVEB classes into one class, as those 3 classes combined only takes up to `r 0.12 + 1.11`% of observations.
+
+N (Normal) - Normal beat.
+
+SVEB (Supraventricular ectopic beat) - Supraventricular Ectopic Beats indicates atrial irritability.  Isolated Supraventricular Ectopic Beats are generally not significant in nature but a high frequency can represent more risk.  An increasing trend in Supraventricular Ectopic Beats may be an indicator or sign for atrial fibrillation. Atrial Fibrillation is considered to be significant as it can lead to heart attack or stroke.
+
+VEB (Ventricular ectopic beat) - Ventricular ectopics are a type of arrhythmia or abnormal heart rhythm. It is caused by the electric signals in the heart starting in a different place and travelling a different way through the heart. If it happens occasionally, it should not cause any problems but if it happens a lot, you will need to have treatment.
+
+F (Fusion beat) - A fusion beat occurs when a supraventricular and a ventricular impulse coincide to produce a hybrid complex. It indicates that there are two foci of pacemaker cells firing simultaneously: a supraventricular pacemaker (e.g. the sinus node) and a competing ventricular pacemaker (source of ventricular ectopics).
+
+Q (Unknown beat) - Unknown beat.
+
+```{r}
+data <- data_original %>% 
+   mutate(type = case_when(
+   type %in% c("F", "Q", "SVEB") ~ "F_Q_SVEB",
+   TRUE ~ type
+   ))
+
+data %>% 
+   group_by(type) %>% 
+   summarise(n = n()) %>% 
+   mutate(n_prop = round(n / sum(n) * 100, 2))
+```
+
+We combined the 3 classes into 1 class, which has only 2183 observations (1.24%) which is still low, but still better for our basic models to classify.
+
+
+We are not interested in the patient record variable, so we'll remove it:
+```{r}
+data <- data %>% 
+   select(-record)
+```
+
+Let's look at descriptive statistics of each variable:
+```{r}
+ExpNumStat(data,by ="A",round= 2, gp = "type") %>% 
+  select(Vname, min, max, mean, median, SD)
+
+variables_of_further_interest <- c("X0_post.RR", "X0_pq_interval", "X0_pre.RR", "X0_qrs_interval", "X0_qt_interval", "X1_post.RR", "X1_pre.RR", "X1_qrs_interval", "X1_qt_interval")
+```
+
+We noticed some variables which should require further analysis, those variables are:
+```{r}
+variables_of_further_interest
+```
+
+We will look through these variables more closely and report any irregularities.
+
+
+```{r}
+ggplot(data, aes(x = X0_qrs_interval, color = type)) +
+   geom_boxplot() +
+   theme_minimal()
+
+data_original %>% 
+   filter(X0_qrs_interval > 125)
+```
+
+There's quite an unusual observation in X0_qrs_interval variable, where our new class F_Q_SVEB has a value of > 125. We also see from the original dataset that this observation was classified as F. We are going to classify this observation as an outlier and remove it.
+```{r}
+data <- data %>% 
+   filter(X0_qrs_interval < 125)
+```
+
+```{r}
+ggplot(data, aes(x = X0_qt_interval, color = type)) +
+   geom_boxplot() +
+   theme_minimal()
+```
+
+We noticed another outlier, for the X0_qt_interval variable, when the type is VEB, the value is close to 250 which is quite unusual in this dataset. We'll remove this observation.
+```{r}
+data <- data %>% 
+   filter(X0_qt_interval < 225)
+```
+
+```{r}
+ggplot(data, aes(x = X1_qrs_interval, color = type)) +
+   geom_boxplot() +
+   theme_minimal()
+
+data_original %>% 
+   filter(X1_qrs_interval > 75, type %in% c("F", "Q", "SVEB"))
+```
+
+Seems like another outlier was detected in X1_qrs_interval variable, where the type is F_Q_SVEB and the value is close to 100. From the original dataset, this observation had F type. We'll remove it.
+```{r}
+data %>% 
+   mutate(row = row_number()) %>% 
+   filter(X1_qrs_interval > 75, type == "F_Q_SVEB") %>% 
+   select(row)
+
+data <- data %>% 
+   filter(row_number() != 10934)
+```
+
+
+We should look at the correlation between variables
+```{r}
+# Correlation
+
+corr_simple <- function(df,sig=0.5){
+  corr <- cor(df)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > sig) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  return(corr)
+}
+
+correlation_matrix = cor(data %>% select(-type))
+
+length(findCorrelation(correlation_matrix, cutoff = 0.99))
+length(findCorrelation(correlation_matrix, cutoff = 0.95))
+length(findCorrelation(correlation_matrix, cutoff = 0.9))
+```
+
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.99))` variables with higher than .99 correlation.
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.95))` variables with higher than .95 correlation.
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.9))` variables with higher than .9 correlation.
+
+## Pre-process
+### Removal of correlated variables
+We've found some highly correlated variables. We don't have a lot of variables (32) and because of that, we'll only remove the variables with >.99 correlation.
+```{r}
+data <- data %>% 
+   select(-findCorrelation(correlation_matrix, cutoff = 0.99))
+```
+
+## Fitting models
+### LDA
+```{r}
+fitControl = trainControl(## 5-fold CV
+                           method = "cv",
+                           number = 5,
+                           ## Estimate class probabilities
+                           classProbs = TRUE,
+                           ## Evaluate performance using 
+                           ## the following function
+                           summaryFunction = multiClassSummary)
+lda.fit = train(type ~ ., data = data, 
+                 method = "lda",
+                 preProcess=c("center","scale"),
+                 trControl = fitControl)
+
+predictions <- lda.fit %>% predict(data)
+
+confusionMatrix(predictions, as.factor(data$type))
+
+# https://towardsdatascience.com/confusion-matrix-for-your-multi-class-machine-learning-model-ff9aa3bf7826
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
