@@ -3,7 +3,7 @@ title: "Mathematical Methods for Artificial Intelligence Lab 3"
 author: "Vytautas Kraujalis"
 date: '2021-10-30'
 output: 
-  html_document:
+  pdf_document:
     toc: true 
     toc_depth: 3
     number_sections: true
@@ -16,23 +16,43 @@ output:
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
-# Lab 3
-## Reading Data
+# Reading Data
 ```{r}
 set.seed(123)
 
 data_original <- read.csv("Arrhythmia_Dataset.csv")
 ```
 
-## Required packages
+# Required packages
 ```{r}
 library(SmartEDA)
 library(dplyr)
 library(ggplot2)
 library(caret)
+library(rattle)
+
+# Function for 3 class accuracy from confusion matrix
+classAcc <- function(confusionMatrix) {
+  class0 <- round(confusionMatrix$table[1, 1] / sum(confusionMatrix$table[, 1]) * 100, 1)
+  class1 <- round(confusionMatrix$table[2, 2] / sum(confusionMatrix$table[, 2]) * 100, 1)
+  class2 <- round(confusionMatrix$table[3, 3] / sum(confusionMatrix$table[, 3]) * 100, 1)
+  acc <- c(class0, class1, class2 )
+  names(acc) <- colnames(confusionMatrix$table)
+  return(acc)
+}
 ```
 
-## EDA, first look at the dataset
+# Parallel processing
+```{r}
+library(parallel) 
+no_cores <- detectCores() - 1
+library(doParallel)
+cl <- makePSOCKcluster(no_cores)
+registerDoParallel(cl)
+```
+
+
+# EDA, first look at the dataset
 ```{r}
 ExpData(data_original,type=1)
 ```
@@ -186,16 +206,16 @@ We have `r length(findCorrelation(correlation_matrix, cutoff = 0.99))` variables
 We have `r length(findCorrelation(correlation_matrix, cutoff = 0.95))` variables with higher than .95 correlation.
 We have `r length(findCorrelation(correlation_matrix, cutoff = 0.9))` variables with higher than .9 correlation.
 
-## Pre-process
-### Removal of correlated variables
+# Pre-process
+## Removal of correlated variables
 We've found some highly correlated variables. We don't have a lot of variables (32) and because of that, we'll only remove the variables with >.99 correlation.
 ```{r}
 data <- data %>% 
    select(-findCorrelation(correlation_matrix, cutoff = 0.99))
 ```
 
-## Fitting models
-### LDA
+# Fitting models
+## Simple LDA
 ```{r}
 fitControl = trainControl(## 5-fold CV
                            method = "cv",
@@ -210,20 +230,129 @@ lda.fit = train(type ~ ., data = data,
                  preProcess=c("center","scale"),
                  trControl = fitControl)
 
+print(lda.fit$results %>% t())
+
+```
+
+AUC is 0.96, which is pretty good, the Mean F1 is 0.8 which also indicated quite a good model. The variance for AUC is 0.002, for Mean F1 - 0.003, this indicated a stable model.
+
+
+```{r}
 predictions <- lda.fit %>% predict(data)
+confusion_matrix <- confusionMatrix(predictions, as.factor(data$type))
 
-confusionMatrix(predictions, as.factor(data$type))
-
-# https://towardsdatascience.com/confusion-matrix-for-your-multi-class-machine-learning-model-ff9aa3bf7826
+confusion_matrix
+classAcc(confusion_matrix)
 ```
 
 
+The overall accuracy is pretty good (96.8%), the accuracies for each class are: F_Q_SVEB = 60.9%, N = 99.6%, VEB = 79.6%.
 
+## Simple QDA
+```{r}
+fitControl <- trainControl(# 5-fold CV
+                           method = "cv",
+                           number = 5,
+                           # Estimate class probabilities
+                           classProbs = TRUE,
+                           # Evaluate performance using 
+                           # the following function
+                           summaryFunction = multiClassSummary,
+                           verboseIter = TRUE)
+# qda.fit <- train(type ~ ., data = data,
+#                 method = "qda",
+#                 preProcess=c("center","scale"),
+#                 trControl = fitControl)
+```
 
+Can't fit a QDA model because of our small class F_Q_SVEB.
 
+## Simple RDA
+```{r}
+library(tictoc)
+tic()
+fitControl <- trainControl(## 5-fold CV
+                           method = "cv",
+                           number = 5,
+                           ## Estimate class probabilities
+                           classProbs = TRUE,
+                           ## Evaluate performance using 
+                           ## the following function
+                           summaryFunction = multiClassSummary,
+                           savePredictions="all",
+                           verboseIter = TRUE)
+rdaGrid =  expand.grid(lambda = seq(0.1,1,0.1), 
+                        gamma = seq(0,1,0.1))
+rda.fit <- train(type ~ ., data = data, 
+                 method = "rda", 
+                 trControl = fitControl,
+                 preProcess=c("center", "scale","pca"),
+                 ## Now specify the exact models 
+                 ## to evaluate:
+                 tuneGrid = rdaGrid)
+toc()
 
+trellis.par.set(caretTheme())
+plot(rda.fit, metric = "AUC")
+plot(rda.fit, metric = "AUC", plotType = "level")
+```
 
+From those 2 graphs, we can see that the best cross-validation AUC is achieved using gamma - 0 and Lambda 0.5 or 0.6.
 
+```{r}
+resamp = rda.fit$pred %>%
+    filter(gamma == 0 & lambda == 0.6)
+confusion_matrix <- confusionMatrix(resamp$pred, resamp$obs)
+confusion_matrix
+classAcc(confusion_matrix)
+```
+Overall accuracy using gamma - 0 and lambda - 0.6 is 95.4%, while accuracies for each class are: F_Q_SVEB = 60.1%, N = 97.8% and VEB = 80.8%.
+
+## CART
+```{r}
+fitControl <- trainControl(## 5-fold CV
+                           method = "cv",
+                           number = 5,
+                           ## Estimate class probabilities
+                           classProbs = TRUE,
+                           ## Evaluate performance using 
+                           ## the following function
+                           summaryFunction = multiClassSummary,
+                           savePredictions="all",
+                           verboseIter = TRUE)
+cart.fit <- train(type ~ ., data = data, 
+                 method = "rpart", 
+                 trControl = fitControl,
+                 preProcess=c("center", "scale"))
+
+cart.fit
+```
+
+```{r}
+predictions <- cart.fit %>% predict(data)
+confusion_matrix <- confusionMatrix(predictions, as.factor(data$type))
+
+confusion_matrix
+classAcc(confusion_matrix)
+```
+
+Our overall accuracy is 95.8%, but if we would look at each class accuracies: F_Q_SVEB = 0%, N = 99.6% and VEB = 77.3% we could see that our newly created class has 0% accuracy.
+
+```{r}
+fancyRpartPlot(cart.fit$finalModel)
+```
+
+We can see that our simple decision tree is too simple for our data.
+
+# Comparison of models
+```{r}
+resamps = resamples(list(LDA = lda.fit, RDA = rda.fit, CART = cart.fit))
+summary(resamps)
+```
+
+Both LDA and RDA models gave very similar results, resulting in ~60% accuracy for F_Q_SVEB, ~99% for N and ~80% for VEB classes. Based on Mean F1, simple LDA model is slightly better than RDA, where LDA had 0.81 mean F1 and RDA had 0.79.
+
+Decision tree performed worse, the model could not predict F_Q_SVEB class at all.
 
 
 
