@@ -30,6 +30,9 @@ library(dplyr)
 library(ggplot2)
 library(caret)
 library(rattle)
+library(partykit)
+library(groupdata2)
+library(cvms)
 
 # Function for 3 class accuracy from confusion matrix
 classAcc <- function(confusionMatrix) {
@@ -238,8 +241,7 @@ AUC is 0.96, which is pretty good, the Mean F1 is 0.8 which also indicated quite
 
 
 ```{r}
-predictions <- lda.fit %>% predict(data)
-confusion_matrix <- confusionMatrix(predictions, as.factor(data$type))
+confusion_matrix <- confusionMatrix(lda.fit)
 
 confusion_matrix
 classAcc(confusion_matrix)
@@ -329,32 +331,132 @@ cart.fit
 ```
 
 ```{r}
-predictions <- cart.fit %>% predict(data)
-confusion_matrix <- confusionMatrix(predictions, as.factor(data$type))
+confusion_matrix <- confusionMatrix(cart.fit)
 
 confusion_matrix
 classAcc(confusion_matrix)
 ```
 
-Our overall accuracy is 95.8%, but if we would look at each class accuracies: F_Q_SVEB = 0%, N = 99.6% and VEB = 77.3% we could see that our newly created class has 0% accuracy.
+Our overall accuracy is 95.9%, but if we would look at each class accuracies: F_Q_SVEB = 0%, N = 99.5% and VEB = 79.3% we could see that our newly created class has 0% accuracy.
 
 ```{r}
 fancyRpartPlot(cart.fit$finalModel)
 ```
 
-We can see that our simple decision tree is too simple for our data.
+We can see from the final model, that our simple decision tree is too simple for our data.
+
+## Conditional Tree
+```{r}
+# Create 5 fold columns with 3 folds each
+data_cv <- fold(
+  data,
+  k = 5,
+  cat_col = "type",
+  parallel = TRUE # set to TRUE to run in parallel
+) %>% 
+   mutate(type = as.factor(type))
+
+data_cv %>% 
+   count(.folds, type)
+```
+
+We created fold for 5-fold cross validation with somewhat equal distributions of target variable in each fold.
+
+```{r}
+ctree_model_fn <- function(train_data, formula, hyperparameters){
+   partykit::ctree(formula = as.formula(formula), 
+         data = train_data)
+}
+
+ctree_predict_fn <- function(test_data, model, formula, hyperparameters, train_data){
+   stats::predict(object = model,
+           newdata = test_data,
+           allow.new.levels = TRUE,
+           type = "prob")
+}
+
+formula <- paste("type ~ ", paste(colnames(data %>% select(-type)), collapse= "+"))
+
+ctree.fit <- cross_validate_fn(
+   data = data_cv,
+   formulas = formula,
+   type = "multinomial",
+   model_fn = ctree_model_fn,
+   predict_fn = ctree_predict_fn,
+   fold_cols = ".folds",
+   parallel = TRUE
+)
+
+```
+
+```{r}
+confusion_matrix_all <- ctree.fit$`Confusion Matrix`[[1]]
+
+confusion_matrix <- confusion_matrix_all %>% 
+   select(-`Fold Column`) %>% 
+   mutate(N_perc = round(N / sum (N) * 100, 2)) %>% 
+   select(-N) %>% 
+   tidyr::pivot_wider(names_from = Target, values_from = N_perc) %>% 
+   remove_rownames %>% 
+   tibble::column_to_rownames(var = "Prediction")
+
+class0 <- round(confusion_matrix[1, 1] / sum(confusion_matrix[, 1]) * 100, 1)
+class1 <- round(confusion_matrix[2, 2] / sum(confusion_matrix[, 2]) * 100, 1)
+class2 <- round(confusion_matrix[3, 3] / sum(confusion_matrix[, 3]) * 100, 1)
+class_acc <- c(class0, class1, class2 )
+names(class_acc) <- colnames(confusion_matrix)
+
+overall_acc <- sum(diag(as.matrix(confusion_matrix)))
+
+overall_acc
+class_acc
+```
+
+Our conditional inference tree gave us overall accuracy of 99.15%, while the accuracies of each class are: F_Q_SVEB - 78.4%, N - 99.7%, VEB - 97.4%.
 
 # Comparison of models
 ```{r}
 resamps = resamples(list(LDA = lda.fit, RDA = rda.fit, CART = cart.fit))
+
+classAcc(confusionMatrix(lda.fit))
+classAcc(confusionMatrix(resamp$pred, resamp$obs))
+classAcc(confusionMatrix(cart.fit))
+
+accuracies <- data.frame() %>% 
+   bind_rows(
+      classAcc(confusionMatrix(lda.fit)),
+      classAcc(confusionMatrix(resamp$pred, resamp$obs)),
+      classAcc(confusionMatrix(cart.fit)),
+      class_acc
+             ) %>% 
+   bind_cols(
+      model = c("LDA", "RDA", "CART", "Conditional Inference Tree"),
+      overall_accuracy = round(c(
+         sum(diag(as.matrix(confusionMatrix(lda.fit)$table))),
+         sum(diag(as.matrix(confusionMatrix(resamp$pred, resamp$obs)$table))) / nrow(data) * 100,
+         sum(diag(as.matrix(confusionMatrix(cart.fit)$table))),
+         overall_acc
+      ), 2)
+      ) %>% 
+   tibble::column_to_rownames(var = "model")
+
+
 summary(resamps)
+
+accuracies
 ```
 
-Both LDA and RDA models gave very similar results, resulting in ~60% accuracy for F_Q_SVEB, ~99% for N and ~80% for VEB classes. Based on Mean F1, simple LDA model is slightly better than RDA, where LDA had 0.81 mean F1 and RDA had 0.79.
+Conditional Inference Tree gave us the best result, the overall accuracy reaches 99.15%, while the accuracies for each class are: F_Q_SVEB = 78.4%, N = 99.7% and VEB = 97.4%.
 
-Decision tree performed worse, the model could not predict F_Q_SVEB class at all.
+Both LDA and RDA models gave very similar results, resulting in ~60% accuracy for F_Q_SVEB, ~99% for N and ~80% for VEB classes.
+
+Decision tree performed worse, the model could not predict F_Q_SVEB class at all. Seems like the decision tree was too simple to capture our new class.
 
 
+# References
+https://cran.r-project.org/web/packages/cvms/vignettes/cross_validating_custom_functions.html
+https://cran.r-project.org/web/packages/cvms/readme/README.html#main-functions
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4980381/
 
 
 
