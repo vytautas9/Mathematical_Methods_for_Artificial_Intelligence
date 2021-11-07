@@ -218,7 +218,7 @@ data <- data %>%
 ```
 
 # Fitting models
-## Simple LDA
+## LDA
 ```{r}
 fitControl = trainControl(## 5-fold CV
                            method = "cv",
@@ -250,7 +250,7 @@ classAcc(confusion_matrix)
 
 The overall accuracy is pretty good (96.8%), the accuracies for each class are: F_Q_SVEB = 60.9%, N = 99.6%, VEB = 79.6%.
 
-## Simple QDA
+## QDA
 ```{r}
 fitControl <- trainControl(# 5-fold CV
                            method = "cv",
@@ -269,7 +269,7 @@ fitControl <- trainControl(# 5-fold CV
 
 Can't fit a QDA model because of our small class F_Q_SVEB.
 
-## Simple RDA
+## RDA
 ```{r}
 library(tictoc)
 tic()
@@ -345,7 +345,7 @@ fancyRpartPlot(cart.fit$finalModel)
 
 We can see from the final model, that our simple decision tree is too simple for our data.
 
-## Conditional Tree
+## Conditional Inference Tree
 ```{r}
 # Create 5 fold columns with 3 folds each
 data_cv <- fold(
@@ -418,10 +418,6 @@ Our conditional inference tree gave us overall accuracy of 99.15%, while the acc
 ```{r}
 resamps = resamples(list(LDA = lda.fit, RDA = rda.fit, CART = cart.fit))
 
-classAcc(confusionMatrix(lda.fit))
-classAcc(confusionMatrix(resamp$pred, resamp$obs))
-classAcc(confusionMatrix(cart.fit))
-
 accuracies <- data.frame() %>% 
    bind_rows(
       classAcc(confusionMatrix(lda.fit)),
@@ -446,7 +442,7 @@ summary(resamps)
 accuracies
 ```
 
-Conditional Inference Tree gave us the best result, the overall accuracy reaches 99.15%, while the accuracies for each class are: F_Q_SVEB = 78.4%, N = 99.7% and VEB = 97.4%.
+Conditional Inference Tree gave us the best result, the overall accuracy reaches 99.1%, while the accuracies for each class are: F_Q_SVEB = 78.4%, N = 99.7% and VEB = 97.4%.
 
 Both LDA and RDA models gave very similar results, resulting in ~60% accuracy for F_Q_SVEB, ~99% for N and ~80% for VEB classes.
 
