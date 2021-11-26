@@ -1,0 +1,342 @@
+---
+title: "Mathematical Methods for Artificial Intelligence Lab 4"
+author: "Vytautas Kraujalis"
+date: '2021-11-20'
+output: 
+  pdf_document:
+    toc: true 
+    toc_depth: 3
+    number_sections: true
+    highlight: tango
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Reading Data
+```{r}
+set.seed(123)
+
+data_original <- read.csv("satellite_train.csv")
+```
+
+# Required packages
+```{r}
+library(SmartEDA)
+library(dplyr)
+library(ggplot2)
+library(caret)
+
+# Function for 6 class accuracy from confusion matrix
+classAcc <- function(confusionMatrix) {
+  class1 <- round(confusionMatrix$table[1, 1] / sum(confusionMatrix$table[, 1]) * 100, 1)
+  class2 <- round(confusionMatrix$table[2, 2] / sum(confusionMatrix$table[, 2]) * 100, 1)
+  class3 <- round(confusionMatrix$table[3, 3] / sum(confusionMatrix$table[, 3]) * 100, 1)
+  class4 <- round(confusionMatrix$table[4, 4] / sum(confusionMatrix$table[, 4]) * 100, 1)
+  class5 <- round(confusionMatrix$table[5, 5] / sum(confusionMatrix$table[, 5]) * 100, 1)
+  class6 <- round(confusionMatrix$table[6, 6] / sum(confusionMatrix$table[, 6]) * 100, 1)
+  acc <- c(class1, class2, class3, class4, class5, class6 )
+  names(acc) <- colnames(confusionMatrix$table)
+  return(acc)
+}
+```
+
+# Parallel processing
+```{r}
+library(parallel) 
+no_cores <- detectCores() - 1
+library(doParallel)
+cl <- makePSOCKcluster(no_cores)
+registerDoParallel(cl)
+```
+
+
+# EDA, first look at the dataset
+```{r}
+ExpData(data_original,type=1)
+```
+
+We have a dataset of 4435 observations with 37 variables, all of the variables are numerical. All variables have no missing values. Let's change the response variable to factor type.
+
+```{r}
+data <- data_original %>% 
+   mutate(V37 = as.factor(V37)) %>% 
+   rename(Target = V37)
+```
+
+```{r}
+data <- data %>% 
+   mutate(
+      Target = as.factor(case_when(
+         Target == "1" ~ "Red Soil",
+         Target == "2" ~ "Cotton Crop",
+         Target == "3" ~ "Grey Soil",
+         Target == "4" ~ "Damp Grey Soil",
+         Target == "5" ~ "Soil With Vegetation Stubble",
+         Target == "7" ~ "Very Damp Grey Soil",
+         TRUE ~ "ERROR"
+      ))
+   )
+```
+
+Let's look at the target variable frequencies
+
+```{r}
+data %>% 
+   group_by(Target) %>% 
+   summarise(n = n()) %>% 
+   mutate(n_prop = round(n / sum(n) * 100, 2))
+```
+
+Our target variable has 6 classes, the smallest class has 415 (9.4%) observations while the biggest class has 1072 (24.2%) observations.
+
+Let's look at descriptive statistics of each variable:
+```{r}
+ExpNumStat(data,by ="A",round= 2, gp = "Target") %>% 
+  select(Vname, min, max, mean, median, SD)
+```
+
+Nothing seems unordinary.
+
+We should look at the correlation between variables
+```{r}
+# Correlation
+
+corr_simple <- function(df,sig=0.5){
+  corr <- cor(df)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > sig) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  return(corr)
+}
+
+correlation_matrix = cor(data %>% select(-Target))
+
+length(findCorrelation(correlation_matrix, cutoff = 0.99))
+length(findCorrelation(correlation_matrix, cutoff = 0.95))
+length(findCorrelation(correlation_matrix, cutoff = 0.9))
+```
+
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.99))` variables with higher than .99 correlation.
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.95))` variables with higher than .95 correlation.
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.9))` variables with higher than .9 correlation.
+
+We'll look through random scatter plots and see how our target variable is seperated across. We'll save some interesting combinations for later. P.S. we'll use jitter() function to overcome observation overlap.
+
+```{r}
+data_plot <- data %>% 
+   select(sample(0:36, 1), sample(0:36, 1), Target)
+data_plot_colnames <- colnames(data_plot)
+colnames(data_plot) <- c("V_1", "V_2", "Target")
+data_plot %>% 
+   ggplot(aes(x = jitter(V_1), y = jitter(V_2), color = Target)) +
+   geom_point() +
+   xlab(data_plot_colnames[1]) +
+   ylab(data_plot_colnames[2])
+
+#combinations <- c("V2 - V3", "V30 - V11", "V7 - V3", "V3 - V24", "V31 - V32")
+```
+
+```{r}
+data %>% 
+   ggplot(aes(x = jitter(V2), y = jitter(V3), color = Target)) +
+   geom_point() +
+   theme_minimal()
+```
+
+Combination of V2 and V3 features shows quite significant separation of "Cotton Crop" group, while "Damp Grey Soil" has almost no separation. All other classes could be visually separated.
+
+```{r}
+data %>% 
+   ggplot(aes(x = jitter(V11), y = jitter(V30), color = Target)) +
+   geom_point() +
+   theme_minimal()
+```
+
+once again, the "Cotton Crop" group seems separatable quite good, but now there's a mix of "Red Soil", "Grey Soil" and "Damp Grey Soil" all in one cluster, which could be hard to distinguish.
+
+```{r}
+data %>% 
+   ggplot(aes(x = jitter(V3), y = jitter(V7), color = Target)) +
+   geom_point() +
+   theme_minimal()
+```
+
+Looking at the combination of V3 and V7 features, we see a clear linear combination, but the target variable is mixed all over the place.
+
+```{r}
+data %>% 
+   ggplot(aes(x = jitter(V3), y = jitter(V24), color = Target)) +
+   geom_point() +
+   theme_minimal()
+```
+
+Using a combination of V3 and V24 features we can separate "Cotton Crop" easily, but the rest of the classes won't be separated so easily.
+
+```{r}
+data %>% 
+   ggplot(aes(x = jitter(V31), y = jitter(V32), color = Target)) +
+   geom_point() +
+   theme_minimal()
+```
+
+Similar results as the plot before, but now the other classes could be separatable a bit better, only the "Damp Grey Soil" and "Soil With Vegetation Stubble" classes are not separatable that good.
+
+It seems that our model could have a problem at detecting "Damp Grey Soil" class.
+
+# Fitting models
+## Gaussian Process
+```{r}
+fitControl <- trainControl(
+  method = "cv",
+  number = 2,
+  classProbs = TRUE,
+  savePredictions="all",
+  verboseIter = TRUE)
+
+
+gp_lin.fit <- train(Target ~ ., data = data %>% 
+                   mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
+                 method = "gaussprLinear", 
+                 trControl = fitControl,
+                 preProcess=c("center", "scale","pca"))
+```
+
+```{r}
+resamp = gp_lin.fit$pred[gp_lin.fit$pred$sigma == gp_lin.fit$bestTune[1,1],]
+confusion_matrix <- confusionMatrix(resamp$pred, resamp$obs)
+
+confusion_matrix
+
+classAcc(confusion_matrix)
+```
+
+## Gaussian Process with Polynomial Kernel
+```{r}
+fitControl <- trainControl(
+  method = "cv",
+  number = 2,
+  classProbs = TRUE,
+  savePredictions="all",
+  verboseIter = TRUE)
+
+gpGrid =  expand.grid(degree  = seq(0.01,0.2,0.01), scale = )
+
+
+gp.fit <- train(Target ~ ., data = data %>% 
+                   mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
+                 method = "gaussprPoly", 
+                 trControl = fitControl,
+                 preProcess=c("center", "scale","pca"),
+                 tuneGrid = gpGrid)
+
+```
+
+## Gaussian Process with Radial Basis Function Kernel
+```{r}
+fitControl <- trainControl(
+  method = "cv",
+  number = 2,
+  classProbs = TRUE,
+  savePredictions="all",
+  verboseIter = TRUE)
+
+gpGrid =  expand.grid(sigma = seq(0.01,0.2,0.01))
+
+
+gp.fit <- train(Target ~ ., data = data %>% 
+                   mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
+                 method = "gaussprRadial", 
+                 trControl = fitControl,
+                 preProcess=c("center", "scale","pca"),
+                 tuneGrid = gpGrid)
+
+```
+
+
+
+```{r}
+plot(gp.fit,metric = "Accuracy")
+```
+
+```{r}
+resamp = gp.fit$pred[gp.fit$pred$sigma == gp.fit$bestTune[1,1],]
+confusion_matrix <- confusionMatrix(resamp$pred, resamp$obs)
+
+confusion_matrix
+
+classAcc(confusion_matrix)
+```
+
+The overall accuracy of model is 87.1% which is much better than a random guess while NIR is 0.2418. The accuracies for each class shows what we predicted - the accuracy for "Damp Grey Soil" is only 47.6% while for other classes: 
++ "Cotton Crop" - 96.7%,
++ "Grey Soil" - 93.1%,
++ "Red Soil" - 97.9%,
++ "Soil With Vegetation Stubble" - 71.1%,
++ Very Damp Grey Soil" - 89.2%.
+
+## QDA
+```{r}
+
+```
+
+
+## RDA
+```{r}
+
+```
+
+
+```{r}
+```
+
+## CART
+```{r}
+
+```
+
+```{r}
+
+```
+
+
+```{r}
+```
+
+
+## Conditional Inference Tree
+```{r}
+
+```
+
+
+```{r}
+
+
+```
+
+```{r}
+
+```
+
+
+# Comparison of models
+```{r}
+
+```
+
+
+
+# References
