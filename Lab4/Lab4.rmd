@@ -197,32 +197,6 @@ Similar results as the plot before, but now the other classes could be separatab
 It seems that our model could have a problem at detecting "Damp Grey Soil" class.
 
 # Fitting models
-## Gaussian Process
-```{r}
-fitControl <- trainControl(
-  method = "cv",
-  number = 2,
-  classProbs = TRUE,
-  savePredictions="all",
-  verboseIter = TRUE)
-
-
-gp_lin.fit <- train(Target ~ ., data = data %>% 
-                   mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
-                 method = "gaussprLinear", 
-                 trControl = fitControl,
-                 preProcess=c("center", "scale","pca"))
-```
-
-```{r}
-resamp = gp_lin.fit$pred[gp_lin.fit$pred$sigma == gp_lin.fit$bestTune[1,1],]
-confusion_matrix <- confusionMatrix(resamp$pred, resamp$obs)
-
-confusion_matrix
-
-classAcc(confusion_matrix)
-```
-
 ## Gaussian Process with Polynomial Kernel
 ```{r}
 fitControl <- trainControl(
@@ -232,17 +206,17 @@ fitControl <- trainControl(
   savePredictions="all",
   verboseIter = TRUE)
 
-gpGrid =  expand.grid(degree  = seq(0.01,0.2,0.01), scale = )
+gpGrid =  expand.grid(degree  = seq(0,3,1), scale = seq(0, 1, 0.1))
 
 
-gp.fit <- train(Target ~ ., data = data %>% 
+gp.vbmp.fit <- train(Target ~ ., data = data %>% 
                    mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
-                 method = "gaussprPoly", 
+                 method = "vbmpRadial", 
                  trControl = fitControl,
-                 preProcess=c("center", "scale","pca"),
-                 tuneGrid = gpGrid)
+                 preProcess=c("center", "scale","pca"))
 
 ```
+Tried fitting Linear Gaussian Process and Gaussian Process with Polynomial Kernel but both methods took too long to compute...
 
 ## Gaussian Process with Radial Basis Function Kernel
 ```{r}
