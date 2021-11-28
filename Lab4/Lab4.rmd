@@ -16,14 +16,15 @@ output:
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
-# Reading Data
+# Gaussian Process
+## Reading Data
 ```{r}
 set.seed(123)
 
 data_original <- read.csv("satellite_train.csv")
 ```
 
-# Required packages
+## Required packages
 ```{r}
 library(SmartEDA)
 library(dplyr)
@@ -44,7 +45,7 @@ classAcc <- function(confusionMatrix) {
 }
 ```
 
-# Parallel processing
+## Parallel processing
 ```{r}
 library(parallel) 
 no_cores <- detectCores() - 1
@@ -54,7 +55,7 @@ registerDoParallel(cl)
 ```
 
 
-# EDA, first look at the dataset
+## EDA, first look at the dataset
 ```{r}
 ExpData(data_original,type=1)
 ```
@@ -196,8 +197,10 @@ Similar results as the plot before, but now the other classes could be separatab
 
 It seems that our model could have a problem at detecting "Damp Grey Soil" class.
 
-# Fitting models
-## Gaussian Process with Polynomial Kernel
+## Fitting models
+Tried fitting Linear Gaussian Process and Gaussian Process with Polynomial Kernel but both methods took too long to compute...
+
+### Gaussian Process - Variational Bayesian Multinomial Probit Regression
 ```{r}
 fitControl <- trainControl(
   method = "cv",
@@ -206,9 +209,6 @@ fitControl <- trainControl(
   savePredictions="all",
   verboseIter = TRUE)
 
-gpGrid =  expand.grid(degree  = seq(0,3,1), scale = seq(0, 1, 0.1))
-
-
 gp.vbmp.fit <- train(Target ~ ., data = data %>% 
                    mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
                  method = "vbmpRadial", 
@@ -216,9 +216,24 @@ gp.vbmp.fit <- train(Target ~ ., data = data %>%
                  preProcess=c("center", "scale","pca"))
 
 ```
-Tried fitting Linear Gaussian Process and Gaussian Process with Polynomial Kernel but both methods took too long to compute...
 
-## Gaussian Process with Radial Basis Function Kernel
+```{r}
+resamp_vbmp = gp.vbmp.fit$pred[gp.vbmp.fit$pred$estimateTheta == gp.vbmp.fit$bestTune[1,1],]
+confusion_matrix <- confusionMatrix(resamp_vbmp$pred, resamp_vbmp$obs)
+
+confusion_matrix
+
+classAcc(confusion_matrix)
+```
+
+The overall accuracy of model is 89.7% which is much better than a random guess while NIR is 0.2417. The accuracies for each class shows what we predicted - the accuracy for "Damp Grey Soil" is only 60.2% while for other classes: 
++ "Cotton Crop" - 95.6%,
++ "Grey Soil" - 94.1%,
++ "Red Soil" - 97.5%,
++ "Soil With Vegetation Stubble" - 84.3%,
++ Very Damp Grey Soil" - 89.1%.
+
+### Gaussian Process with Radial Basis Function Kernel
 ```{r}
 fitControl <- trainControl(
   method = "cv",
@@ -246,71 +261,136 @@ plot(gp.fit,metric = "Accuracy")
 ```
 
 ```{r}
-resamp = gp.fit$pred[gp.fit$pred$sigma == gp.fit$bestTune[1,1],]
-confusion_matrix <- confusionMatrix(resamp$pred, resamp$obs)
+resamp_rb = gp.fit$pred[gp.fit$pred$sigma == gp.fit$bestTune[1,1],]
+confusion_matrix <- confusionMatrix(resamp_rb$pred, resamp_rb$obs)
 
 confusion_matrix
 
 classAcc(confusion_matrix)
 ```
 
-The overall accuracy of model is 87.1% which is much better than a random guess while NIR is 0.2418. The accuracies for each class shows what we predicted - the accuracy for "Damp Grey Soil" is only 47.6% while for other classes: 
-+ "Cotton Crop" - 96.7%,
-+ "Grey Soil" - 93.1%,
-+ "Red Soil" - 97.9%,
-+ "Soil With Vegetation Stubble" - 71.1%,
-+ Very Damp Grey Soil" - 89.2%.
+The overall accuracy of model is 87.9% which is much better than a random guess while NIR is 0.2419. The accuracies for each class shows what we predicted - the accuracy for "Damp Grey Soil" is only 54.1% while for other classes: 
++ "Cotton Crop" - 97.9%,
++ "Grey Soil" - 92.9%,
++ "Red Soil" - 97.0%,
++ "Soil With Vegetation Stubble" - 72.3%,
++ Very Damp Grey Soil" - 89.6%.
 
-## QDA
+### SVM
 ```{r}
+fitControl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  savePredictions="all",
+  verboseIter = TRUE)
 
-```
+svmGrid =  expand.grid(C=seq(0.001,5,0.2))
 
-
-## RDA
-```{r}
-
-```
-
-
-```{r}
-```
-
-## CART
-```{r}
-
-```
-
-```{r}
-
-```
-
-
-```{r}
-```
-
-
-## Conditional Inference Tree
-```{r}
-
-```
-
-
-```{r}
-
-
+svm.fit <- train(Target ~ ., data = data %>% 
+                   mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
+                 method = "svmLinear", 
+                 trControl = fitControl,
+                 preProcess=c("center", "scale","pca"),
+                 tuneGrid = svmGrid)
 ```
 
 ```{r}
-
+plot(svm.fit,metric = "Accuracy")
 ```
 
-
-# Comparison of models
 ```{r}
+resamp_svm = svm.fit$pred[svm.fit$pred$C==svm.fit$bestTune[1,1],]
 
+confusion_matrix <- confusionMatrix(resamp_svm$pred, resamp_svm$obs)
+
+confusion_matrix
+
+classAcc(confusion_matrix)
+```
+
+### L2 Regularized Linear Support Vector Machines with Class Weights
+```{r}
+fitControl <- trainControl(
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  savePredictions="all",
+  verboseIter = TRUE)
+
+svmGrid =  expand.grid(C=seq(0.001,5,0.2), sigma = seq(0.01, 0.3, 0.05))
+
+svm.radial.fit <- train(Target ~ ., data = data %>% 
+                   mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
+                 method = "svmRadial", 
+                 trControl = fitControl,
+                 preProcess=c("center", "scale","pca"),
+                 tuneGrid = svmGrid)
 ```
 
 
 
-# References
+
+## Comparison of models
+```{r}
+resamps = resamples(list(GP_vmbp = gp.vbmp.fit, GP_RadialBasis = gp.fit))
+
+accuracies <- data.frame() %>% 
+   bind_rows(
+      classAcc(confusionMatrix(resamp_vbmp$pred, resamp_vbmp$obs)),
+      classAcc(confusionMatrix(resamp_rb$pred, resamp_rb$obs)),
+             ) %>% 
+   bind_cols(
+      model = c("GP - Variational Bayesian Multinomial Probit Reg.", "GP - Radial Basis"),
+      overall_accuracy = round(c(
+         sum(diag(as.matrix(confusionMatrix(resamp_vbmp$pred, resamp_vbmp$obs)$table))) / sum(colSums(confusionMatrix(resamp_vbmp$pred, resamp_vbmp$obs)$table)) * 100,
+         sum(diag(as.matrix(confusionMatrix(resamp_rb$pred, resamp_rb$obs)$table))) / sum(colSums(confusionMatrix(resamp_rb$pred, resamp_rb$obs)$table)) * 100
+      ), 2)
+      ) %>% 
+   tibble::column_to_rownames(var = "model")
+
+
+summary(resamps)
+
+accuracies
+```
+
+Variational Bayesian Multinomial Probit Regression gave us the best overall accuracy of 89.7% while Gaussian Process with Radial Basis has 87.7% accuracy.
+
+Both methods struggle with predicting "Damp Grey Soil" class, but that's what we predicted from scatter plots.
+
+# SVM
+
+## Required packages
+```{r}
+library(SmartEDA)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(R.matlab)
+
+# Function for 6 class accuracy from confusion matrix
+classAcc <- function(confusionMatrix) {
+  class1 <- round(confusionMatrix$table[1, 1] / sum(confusionMatrix$table[, 1]) * 100, 1)
+  class2 <- round(confusionMatrix$table[2, 2] / sum(confusionMatrix$table[, 2]) * 100, 1)
+  class3 <- round(confusionMatrix$table[3, 3] / sum(confusionMatrix$table[, 3]) * 100, 1)
+  class4 <- round(confusionMatrix$table[4, 4] / sum(confusionMatrix$table[, 4]) * 100, 1)
+  class5 <- round(confusionMatrix$table[5, 5] / sum(confusionMatrix$table[, 5]) * 100, 1)
+  class6 <- round(confusionMatrix$table[6, 6] / sum(confusionMatrix$table[, 6]) * 100, 1)
+  acc <- c(class1, class2, class3, class4, class5, class6 )
+  names(acc) <- colnames(confusionMatrix$table)
+  return(acc)
+}
+```
+
+## Reading Data
+```{r}
+set.seed(123)
+
+load(file = "thyroid.rda")
+annthyroid <- readMat("annthyroid.mat") %>% as.data.frame()
+```
+
+
+
+
