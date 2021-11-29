@@ -254,12 +254,14 @@ gp.fit <- train(Target ~ ., data = data %>%
 
 ```
 
-
-
+Let's look which sigma gives the best accuracy:
 ```{r}
 plot(gp.fit,metric = "Accuracy")
 ```
 
+Best results are obtained when sigma is 0.15.
+
+Using sigma = 0.15 let's look at the accuracies of each class and overall accuracy:
 ```{r}
 resamp_rb = gp.fit$pred[gp.fit$pred$sigma == gp.fit$bestTune[1,1],]
 confusion_matrix <- confusionMatrix(resamp_rb$pred, resamp_rb$obs)
@@ -276,7 +278,7 @@ The overall accuracy of model is 87.9% which is much better than a random guess 
 + "Soil With Vegetation Stubble" - 72.3%,
 + Very Damp Grey Soil" - 89.6%.
 
-### SVM
+### Support Vector Machines with Linear Kernel
 ```{r}
 fitControl <- trainControl(
   method = "cv",
@@ -295,10 +297,14 @@ svm.fit <- train(Target ~ ., data = data %>%
                  tuneGrid = svmGrid)
 ```
 
+Let's look which Cost gives us the best accuracy:
 ```{r}
 plot(svm.fit,metric = "Accuracy")
 ```
 
+Best accuracy is obtained using Cost = 0.601.
+
+Using Cost = 0.601 let's look at the accuracies:
 ```{r}
 resamp_svm = svm.fit$pred[svm.fit$pred$C==svm.fit$bestTune[1,1],]
 
@@ -309,7 +315,7 @@ confusion_matrix
 classAcc(confusion_matrix)
 ```
 
-### L2 Regularized Linear Support Vector Machines with Class Weights
+### Support Vector Machines with Radial Basis Function Kernel
 ```{r}
 fitControl <- trainControl(
   method = "cv",
@@ -318,7 +324,7 @@ fitControl <- trainControl(
   savePredictions="all",
   verboseIter = TRUE)
 
-svmGrid =  expand.grid(C=seq(0.001,5,0.2), sigma = seq(0.01, 0.3, 0.05))
+svmGrid =  expand.grid(C=seq(0.001,5,0.2), sigma = seq(0.01, 0.3, 0.09))
 
 svm.radial.fit <- train(Target ~ ., data = data %>% 
                    mutate(Target = factor(Target, labels = make.names(levels(Target)))), 
@@ -328,38 +334,59 @@ svm.radial.fit <- train(Target ~ ., data = data %>%
                  tuneGrid = svmGrid)
 ```
 
+Let's look at the accuracy using different parameters:
+```{r}
+plot(svm.radial.fit,metric = "Accuracy")
+```
 
+Best accuracy is obtained using sigma = 0.1, Cost = 2.8, let's use those parameters to look at the class accuracies:
+```{r}
+resamp_svm_radial = svm.radial.fit$pred[svm.radial.fit$pred$C == svm.radial.fit$bestTune[1,2] & svm.radial.fit$pred$sigma == svm.radial.fit$bestTune[1,1],]
+
+confusion_matrix <- confusionMatrix(resamp_svm_radial$pred, resamp_svm_radial$obs)
+
+confusion_matrix
+
+classAcc(confusion_matrix)
+```
+
+Overall accuracy is 74.4% while the accuracies for each class are:
++ Cotton Crop - 95.8%,
++ Damp Grey Soil - 46.3%,
++ Grey Soil - 96.5%,
++ Red Soil - 60.5%,
++ Soil With Vegetation Stubble - 32.3%,
++ Very Damp Grey Soil - 88.6%
 
 
 ## Comparison of models
 ```{r}
-resamps = resamples(list(GP_vmbp = gp.vbmp.fit, GP_RadialBasis = gp.fit))
-
 accuracies <- data.frame() %>% 
    bind_rows(
       classAcc(confusionMatrix(resamp_vbmp$pred, resamp_vbmp$obs)),
       classAcc(confusionMatrix(resamp_rb$pred, resamp_rb$obs)),
+      classAcc(confusionMatrix(resamp_svm$pred, resamp_svm$obs)),
+      classAcc(confusionMatrix(resamp_svm_radial$pred, resamp_svm_radial$obs))
              ) %>% 
    bind_cols(
-      model = c("GP - Variational Bayesian Multinomial Probit Reg.", "GP - Radial Basis"),
+      model = c("GP - Variational Bayesian Multinomial Probit Reg.", "GP - Radial Basis", "SVM - Linear Kernel", "SVM - Radial Kernel"),
       overall_accuracy = round(c(
          sum(diag(as.matrix(confusionMatrix(resamp_vbmp$pred, resamp_vbmp$obs)$table))) / sum(colSums(confusionMatrix(resamp_vbmp$pred, resamp_vbmp$obs)$table)) * 100,
-         sum(diag(as.matrix(confusionMatrix(resamp_rb$pred, resamp_rb$obs)$table))) / sum(colSums(confusionMatrix(resamp_rb$pred, resamp_rb$obs)$table)) * 100
+         sum(diag(as.matrix(confusionMatrix(resamp_rb$pred, resamp_rb$obs)$table))) / sum(colSums(confusionMatrix(resamp_rb$pred, resamp_rb$obs)$table)) * 100,
+         sum(diag(as.matrix(confusionMatrix(resamp_svm$pred, resamp_svm$obs)$table))) / sum(colSums(confusionMatrix(resamp_svm$pred, resamp_svm$obs)$table)) * 100,
+         sum(diag(as.matrix(confusionMatrix(resamp_svm_radial$pred, resamp_svm_radial$obs)$table))) / sum(colSums(confusionMatrix(resamp_svm_radial$pred, resamp_svm_radial$obs)$table)) * 100
       ), 2)
       ) %>% 
    tibble::column_to_rownames(var = "model")
 
-
-summary(resamps)
-
 accuracies
 ```
 
-Variational Bayesian Multinomial Probit Regression gave us the best overall accuracy of 89.7% while Gaussian Process with Radial Basis has 87.7% accuracy.
+Variational Bayesian Multinomial Probit Regression gave us the best overall accuracy of 89.7% while Gaussian Process with Radial Basis has 87.7% accuracy. Simple SVM with linear kernel gave us the worst overall accuracy of 72.5%.
 
-Both methods struggle with predicting "Damp Grey Soil" class, but that's what we predicted from scatter plots.
+Both Gaussian Process methods struggle with predicting "Damp Grey Soil" class, but that's what we predicted from scatter plots. While SVM methods showed similar results predicting "Damp Grey Soil" class, but the SVM models had a very hard time predicting "Soil With Vegetation Stubble" while GP methods didnt had a very hard time predicting this class.
 
-# SVM
+# SVM dataset
 
 ## Required packages
 ```{r}
@@ -368,16 +395,13 @@ library(dplyr)
 library(ggplot2)
 library(caret)
 library(R.matlab)
+library(kernlab)
 
 # Function for 6 class accuracy from confusion matrix
 classAcc <- function(confusionMatrix) {
   class1 <- round(confusionMatrix$table[1, 1] / sum(confusionMatrix$table[, 1]) * 100, 1)
   class2 <- round(confusionMatrix$table[2, 2] / sum(confusionMatrix$table[, 2]) * 100, 1)
-  class3 <- round(confusionMatrix$table[3, 3] / sum(confusionMatrix$table[, 3]) * 100, 1)
-  class4 <- round(confusionMatrix$table[4, 4] / sum(confusionMatrix$table[, 4]) * 100, 1)
-  class5 <- round(confusionMatrix$table[5, 5] / sum(confusionMatrix$table[, 5]) * 100, 1)
-  class6 <- round(confusionMatrix$table[6, 6] / sum(confusionMatrix$table[, 6]) * 100, 1)
-  acc <- c(class1, class2, class3, class4, class5, class6 )
+  acc <- c(class1, class2 )
   names(acc) <- colnames(confusionMatrix$table)
   return(acc)
 }
@@ -387,10 +411,176 @@ classAcc <- function(confusionMatrix) {
 ```{r}
 set.seed(123)
 
-load(file = "thyroid.rda")
 annthyroid <- readMat("annthyroid.mat") %>% as.data.frame()
 ```
 
+## EDA, first look at the dataset
+```{r}
+ExpData(annthyroid,type=1)
+```
+
+We have a dataset of 7200 observations, all 7 variables are of numeric. None of the columns have missing values.
+
+Let's look at the target variable frequencies
+
+```{r}
+annthyroid %>% 
+   group_by(y) %>% 
+   summarise(n = n()) %>% 
+   mutate(n_prop = round(n / sum(n) * 100, 2))
+```
+
+It's a two-class problem, there's a huge class imbalance of  6666 (92.5%) / 534 (7.5%). In this lab, we are not going to try to address this problem.
+
+Let's look at descriptive statistics of each variable:
+```{r}
+ExpNumStat(annthyroid,by ="A",round= 2, gp = "y") %>% 
+  select(Vname, min, max, mean, median, SD)
+```
+
+Nothing seems unordinary.
+
+We should look at the correlation between variables
+```{r}
+correlation_matrix = cor(annthyroid %>% select(-y))
+
+length(findCorrelation(correlation_matrix, cutoff = 0.99))
+length(findCorrelation(correlation_matrix, cutoff = 0.95))
+length(findCorrelation(correlation_matrix, cutoff = 0.9))
+```
+
+We don't have any variables with higher correlation than 0.9.
+
+We'll look through random scatter plots and see how our target variable is seperated across. We'll save some interesting combinations for later. P.S. we'll use jitter() function to overcome observation overlap.
+
+```{r}
+data_plot <- annthyroid %>% 
+   select(sample(0:6, 1), sample(0:6, 1), y) %>% 
+  mutate(y = as.factor(y))
+data_plot_colnames <- colnames(data_plot)
+colnames(data_plot) <- c("V_1", "V_2", "y")
+data_plot %>% 
+   ggplot(aes(x = jitter(V_1), y = jitter(V_2), color = y)) +
+   geom_point() +
+   xlab(data_plot_colnames[1]) +
+   ylab(data_plot_colnames[2])
+
+#combinations <- c("X.3 - X.6", "X.2 - X.3", "X.5 - X.3")
+```
 
 
+```{r}
+annthyroid %>% 
+   ggplot(aes(x = jitter(X.3), y = jitter(X.6), color = as.factor(y))) +
+   geom_point() +
+   theme_minimal()
+```
 
+Combination of X.3 and X.6 features shows a very small separation between the 2 features. Seems like class 1 lies mostly in the range of X.6 [0 - 0.08] and X.3 [0 - 0.025].
+
+```{r}
+annthyroid %>% 
+   ggplot(aes(x = jitter(X.2), y = jitter(X.3), color = as.factor(y))) +
+   geom_point() +
+   theme_minimal()
+```
+
+This time, the class separation is much better, when the value of X.2 is greater than 0, there's a high chance the target class will be "1".
+
+```{r}
+annthyroid %>% 
+   ggplot(aes(x = jitter(X.5), y = jitter(X.3), color = as.factor(y))) +
+   geom_point() +
+   theme_minimal()
+```
+
+A combination of X.3 and X.5 almost shows us no class separation at all.
+
+## Fitting models
+### SVM Novelty Detenction - Linear Kernel
+```{r}
+fold_ids = createFolds(annthyroid$y, k = 5, list = TRUE, returnTrain = FALSE)
+
+nu_list = seq(0.01,0.5,0.01)
+
+collect_CV = array(0, dim = c(length(nu_list),5,5))
+
+for(k in 1:5){
+  for( i in 1:length(nu_list)){
+    anomaly = ksvm(y ~ .,
+                   annthyroid[-fold_ids[[k]], ],
+                   kernel = "vanilladot",
+                   type = 'one-svc',
+                   nu = nu_list[i], kpar = list())
+    y_true = annthyroid$y[fold_ids[[k]]]
+    y_pred = 1 - 1*(predict(anomaly, annthyroid[fold_ids[[k]], ]))
+    confMat = confusionMatrix(table(y_true = y_true, y_pred = y_pred))
+    collect_CV[i,1,k] = confMat$overall[1] #overall accuracy
+    collect_CV[i,2,k] = confMat$overall[2] #Kappa
+    collect_CV[i,3,k] = confMat$overall[5] #NIR rate
+    collect_CV[i,4,k] = confMat$byClass[1] #Normal class (0) acc
+    collect_CV[i,5,k] = confMat$byClass[2] #Anomaly class (1) acc
+    
+  }
+  print(paste("Done with fold:", k))
+}
+
+CV = apply(collect_CV, c(1,2), mean)
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(nu_list,CV[,1],main="Overall Acc",xlab="nu",ylab="", type = "l")
+plot(nu_list,CV[,2],main="Kappa value",xlab="nu",ylab="", type = "l")
+plot(nu_list,CV[,4],main="Normal class acc",xlab="nu",ylab="", type = "l")
+plot(nu_list,CV[,5],main="Anomaly class acc",xlab="nu",ylab="", type = "l")
+```
+
+Accuracy for the anomaly class is really small, no matter what nu value we are choosing.
+
+### SVM Novelty Detenction - Radial Basis Kernel
+```{r}
+fold_ids = createFolds(annthyroid$y, k = 5, list = TRUE, returnTrain = FALSE)
+
+nu_list = seq(0.01,0.5,0.01)
+
+collect_CV = array(0, dim = c(length(nu_list),5,5))
+
+for(k in 1:5){
+  for( i in 1:length(nu_list)){
+    for(j in 1:length(kpar_list[[1]])){
+    anomaly = ksvm(y ~ .,
+                   annthyroid[-fold_ids[[k]], ],
+                   kernel = "rbfdot",
+                   type = 'one-svc',
+                   nu = nu_list[i], kpar = "automatic")
+    y_true = annthyroid$y[fold_ids[[k]]]
+    y_pred = 1 - 1*(predict(anomaly, annthyroid[fold_ids[[k]], ]))
+    confMat = confusionMatrix(table(y_true = y_true, y_pred = y_pred))
+    collect_CV[i,1,k] = confMat$overall[1] #overall accuracy
+    collect_CV[i,2,k] = confMat$overall[2] #Kappa
+    collect_CV[i,3,k] = confMat$overall[5] #NIR rate
+    collect_CV[i,4,k] = confMat$byClass[1] #Normal class (0) acc
+    collect_CV[i,5,k] = confMat$byClass[2] #Anomaly class (1) acc
+    }
+    
+  }
+  print(paste("Done with fold:", k))
+}
+
+CV = apply(collect_CV, c(1,2), mean)
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(nu_list,CV[,1],main="Overall Acc",xlab="nu",ylab="", type = "l")
+plot(nu_list,CV[,2],main="Kappa value",xlab="nu",ylab="", type = "l")
+plot(nu_list,CV[,4],main="Normal class acc",xlab="nu",ylab="", type = "l")
+plot(nu_list,CV[,5],main="Anomaly class acc",xlab="nu",ylab="", type = "l")
+```
+
+The higher the value of nu, the lower accuracy for the anomaly class. Highest accuracy of the anomaly class is reached using nu ~0.05 and the accuracy is ~24%
+
+## Conclusion
+
+Seems like using Radial Basis Kernel gives much better prediction of anomaly class (~24%) while the linear kernel reached only 8% accuracy for the anomaly class
