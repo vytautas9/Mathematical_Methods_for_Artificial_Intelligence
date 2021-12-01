@@ -130,22 +130,22 @@ length(findCorrelation(correlation_matrix, cutoff = 0.95))
 length(findCorrelation(correlation_matrix, cutoff = 0.9))
 ```
 
-We have `r length(findCorrelation(correlation_matrix, cutoff = 0.99))` variables with higher than .99 correlation.
-We have `r length(findCorrelation(correlation_matrix, cutoff = 0.95))` variables with higher than .95 correlation.
-We have `r length(findCorrelation(correlation_matrix, cutoff = 0.9))` variables with higher than .9 correlation.
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.99))` variables with higher than .99 correlation.  
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.95))` variables with higher than .95 correlation.  
+We have `r length(findCorrelation(correlation_matrix, cutoff = 0.9))` variables with higher than .9 correlation.  
 
 We'll look through random scatter plots and see how our target variable is seperated across. We'll save some interesting combinations for later. P.S. we'll use jitter() function to overcome observation overlap.
 
 ```{r}
-data_plot <- data %>% 
-   select(sample(0:36, 1), sample(0:36, 1), Target)
-data_plot_colnames <- colnames(data_plot)
-colnames(data_plot) <- c("V_1", "V_2", "Target")
-data_plot %>% 
-   ggplot(aes(x = jitter(V_1), y = jitter(V_2), color = Target)) +
-   geom_point() +
-   xlab(data_plot_colnames[1]) +
-   ylab(data_plot_colnames[2])
+# data_plot <- data %>% 
+#    select(sample(0:36, 1), sample(0:36, 1), Target)
+# data_plot_colnames <- colnames(data_plot)
+# colnames(data_plot) <- c("V_1", "V_2", "Target")
+# data_plot %>% 
+#    ggplot(aes(x = jitter(V_1), y = jitter(V_2), color = Target)) +
+#    geom_point() +
+#    xlab(data_plot_colnames[1]) +
+#    ylab(data_plot_colnames[2])
 
 #combinations <- c("V2 - V3", "V30 - V11", "V7 - V3", "V3 - V24", "V31 - V32")
 ```
@@ -259,9 +259,9 @@ Let's look which sigma gives the best accuracy:
 plot(gp.fit,metric = "Accuracy")
 ```
 
-Best results are obtained when sigma is 0.15.
+Best results are obtained when sigma is `r gp.fit$bestTune[1,1]`.
 
-Using sigma = 0.15 let's look at the accuracies of each class and overall accuracy:
+Using sigma = `r gp.fit$bestTune[1,1]` let's look at the accuracies of each class and overall accuracy:
 ```{r}
 resamp_rb = gp.fit$pred[gp.fit$pred$sigma == gp.fit$bestTune[1,1],]
 confusion_matrix <- confusionMatrix(resamp_rb$pred, resamp_rb$obs)
@@ -271,12 +271,12 @@ confusion_matrix
 classAcc(confusion_matrix)
 ```
 
-The overall accuracy of model is 87.9% which is much better than a random guess while NIR is 0.2419. The accuracies for each class shows what we predicted - the accuracy for "Damp Grey Soil" is only 54.1% while for other classes: 
-+ "Cotton Crop" - 97.9%,
-+ "Grey Soil" - 92.9%,
-+ "Red Soil" - 97.0%,
-+ "Soil With Vegetation Stubble" - 72.3%,
-+ Very Damp Grey Soil" - 89.6%.
+The overall accuracy of model is 87.9% which is much better than a random guess while NIR is 0.2419. The accuracies for each class shows what we predicted - the accuracy for "Damp Grey Soil" is only 54.1% while for other classes:  
+* "Cotton Crop" - 97.9%,
+* "Grey Soil" - 92.9%,
+* "Red Soil" - 97.0%,
+* "Soil With Vegetation Stubble" - 72.3%,
+* Very Damp Grey Soil" - 89.6%.
 
 ### Support Vector Machines with Linear Kernel
 ```{r}
@@ -302,9 +302,9 @@ Let's look which Cost gives us the best accuracy:
 plot(svm.fit,metric = "Accuracy")
 ```
 
-Best accuracy is obtained using Cost = 0.601.
+Best accuracy is obtained using Cost = `r svm.fit$bestTune[1,1]`.
 
-Using Cost = 0.601 let's look at the accuracies:
+Using Cost = `r svm.fit$bestTune[1,1]` let's look at the accuracies:
 ```{r}
 resamp_svm = svm.fit$pred[svm.fit$pred$C==svm.fit$bestTune[1,1],]
 
@@ -314,6 +314,9 @@ confusion_matrix
 
 classAcc(confusion_matrix)
 ```
+
+A very poor prediction for "Soil With Vegetation Stubble" class, only 12.6%.
+
 
 ### Support Vector Machines with Radial Basis Function Kernel
 ```{r}
@@ -339,7 +342,7 @@ Let's look at the accuracy using different parameters:
 plot(svm.radial.fit,metric = "Accuracy")
 ```
 
-Best accuracy is obtained using sigma = 0.1, Cost = 2.8, let's use those parameters to look at the class accuracies:
+Best accuracy is obtained using sigma = `r svm.radial.fit$bestTune[1,1]`, Cost = `r svm.radial.fit$bestTune[1,2]`, let's use those parameters to look at the class accuracies:
 ```{r}
 resamp_svm_radial = svm.radial.fit$pred[svm.radial.fit$pred$C == svm.radial.fit$bestTune[1,2] & svm.radial.fit$pred$sigma == svm.radial.fit$bestTune[1,1],]
 
@@ -350,13 +353,13 @@ confusion_matrix
 classAcc(confusion_matrix)
 ```
 
-Overall accuracy is 74.4% while the accuracies for each class are:
-+ Cotton Crop - 95.8%,
-+ Damp Grey Soil - 46.3%,
-+ Grey Soil - 96.5%,
-+ Red Soil - 60.5%,
-+ Soil With Vegetation Stubble - 32.3%,
-+ Very Damp Grey Soil - 88.6%
+Overall accuracy is 74.4% while the accuracies for each class are:  
+* Cotton Crop - 95.8%,
+* Damp Grey Soil - 46.3%,
+* Grey Soil - 96.5%,
+* Red Soil - 60.5%,
+* Soil With Vegetation Stubble - 32.3%,
+* Very Damp Grey Soil - 88.6%
 
 
 ## Comparison of models
@@ -454,16 +457,16 @@ We don't have any variables with higher correlation than 0.9.
 We'll look through random scatter plots and see how our target variable is seperated across. We'll save some interesting combinations for later. P.S. we'll use jitter() function to overcome observation overlap.
 
 ```{r}
-data_plot <- annthyroid %>% 
-   select(sample(0:6, 1), sample(0:6, 1), y) %>% 
-  mutate(y = as.factor(y))
-data_plot_colnames <- colnames(data_plot)
-colnames(data_plot) <- c("V_1", "V_2", "y")
-data_plot %>% 
-   ggplot(aes(x = jitter(V_1), y = jitter(V_2), color = y)) +
-   geom_point() +
-   xlab(data_plot_colnames[1]) +
-   ylab(data_plot_colnames[2])
+# data_plot <- annthyroid %>% 
+#    select(sample(0:6, 1), sample(0:6, 1), y) %>% 
+#   mutate(y = as.factor(y))
+# data_plot_colnames <- colnames(data_plot)
+# colnames(data_plot) <- c("V_1", "V_2", "y")
+# data_plot %>% 
+#    ggplot(aes(x = jitter(V_1), y = jitter(V_2), color = y)) +
+#    geom_point() +
+#    xlab(data_plot_colnames[1]) +
+#    ylab(data_plot_colnames[2])
 
 #combinations <- c("X.3 - X.6", "X.2 - X.3", "X.5 - X.3")
 ```
@@ -548,7 +551,6 @@ collect_CV = array(0, dim = c(length(nu_list),5,5))
 
 for(k in 1:5){
   for( i in 1:length(nu_list)){
-    for(j in 1:length(kpar_list[[1]])){
     anomaly = ksvm(y ~ .,
                    annthyroid[-fold_ids[[k]], ],
                    kernel = "rbfdot",
@@ -562,8 +564,6 @@ for(k in 1:5){
     collect_CV[i,3,k] = confMat$overall[5] #NIR rate
     collect_CV[i,4,k] = confMat$byClass[1] #Normal class (0) acc
     collect_CV[i,5,k] = confMat$byClass[2] #Anomaly class (1) acc
-    }
-    
   }
   print(paste("Done with fold:", k))
 }
