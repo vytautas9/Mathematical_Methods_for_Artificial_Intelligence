@@ -1,0 +1,310 @@
+---
+title: "Mathematical Methods for Artificial Intelligence Lab 4 - Random Forest and Boosting Alg."
+author: "Vytautas Kraujalis"
+date: '2021-12-18'
+output: 
+  pdf_document:
+    toc: true 
+    toc_depth: 3
+    number_sections: true
+    highlight: tango
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Random Forest
+## Required packages
+```{r}
+library(data.table)
+library(SmartEDA)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(janitor)
+library(tictoc)
+
+# Function for 4 class accuracy from confusion matrix
+classAcc <- function(confusionMatrix) {
+  class1 <- round(confusionMatrix$table[1, 1] / sum(confusionMatrix$table[, 1]) * 100, 1)
+  class2 <- round(confusionMatrix$table[2, 2] / sum(confusionMatrix$table[, 2]) * 100, 1)
+  class3 <- round(confusionMatrix$table[3, 3] / sum(confusionMatrix$table[, 3]) * 100, 1)
+  class4 <- round(confusionMatrix$table[4, 4] / sum(confusionMatrix$table[, 4]) * 100, 1)
+  acc <- c(class1, class2, class3, class4 )
+  names(acc) <- colnames(confusionMatrix$table)
+  return(acc)
+}
+```
+
+## Parallel processing
+```{r}
+library(parallel) 
+no_cores <- detectCores() - 1
+library(doParallel)
+cl <- makePSOCKcluster(no_cores)
+registerDoParallel(cl)
+```
+
+## Reading Data
+```{r}
+set.seed(123)
+
+data_original <- fread("activity.csv")
+data_names <- read.table("names.txt") %>% 
+   rename(column_names = V1)
+```
+
+## Data Preparation
+### Column names
+```{r}
+length(data_names$column_names)
+
+n_distinct(data_names$column_names)
+```
+
+There are 535 provided column names, but only 417 are distinct, it means we have some duplicated names, we need to make them unique. To do that, for duplicated names we'll add a unique ID at the end:
+
+```{r}
+data <- data_original
+colnames(data) <- data_names$column_names
+
+data <- data %>% 
+   clean_names()
+
+n_distinct(colnames(data))
+```
+
+## EDA, first look at the dataset
+```{r}
+ExpData(data,type = 1)
+```
+
+We have a dataset of 4480 observations with 535 variables, only 1 variable has text format. All variables have no missing values. We can see that there are 4 variables with zero variance, we'll remove those later.
+
+Let's look at the response variable:
+
+```{r}
+data %>% 
+   group_by(activity) %>% 
+   summarise(n = n()) %>% 
+   mutate(n_prop = round(n / sum(n) * 100, 2))
+```
+
+We have perfectly balanced response variable with 4 classes.
+
+We'll change the response variable to factor type.
+
+```{r}
+data <- data %>% 
+   mutate_if(is.character, as.factor)
+```
+
+```{r}
+data %>% 
+   select(nearZeroVar(data)) %>% 
+   summary()
+```
+
+As mentioned previously, we have 4 variables with zero variance, we will remove those columns.
+
+```{r}
+data <- data %>% 
+   select(-nearZeroVar(data))
+```
+
+We should look at the correlation between variables
+```{r}
+# Correlation
+
+corr_simple <- function(df,sig=0.5){
+  corr <- cor(df)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > sig) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  return(corr)
+}
+
+correlation_matrix = cor(data %>% select(-activity, -subject_index))
+
+length(findCorrelation(correlation_matrix, cutoff = 0.99))
+length(findCorrelation(correlation_matrix, cutoff = 0.95))
+length(findCorrelation(correlation_matrix, cutoff = 0.9))
+```
+
+We have 309 variables with correlation greater than 0.99, we will remove those variables.
+
+```{r}
+data <- data %>% 
+   select(-findCorrelation(correlation_matrix, cutoff = 0.99))
+```
+
+We'll convert subject index column to factor type:
+
+```{r}
+data %>% 
+   select(subject_index) %>% 
+   table()
+
+data <- data %>% 
+   mutate(subject_index = as.factor(subject_index))
+```
+
+## Fitting Random Forest Model
+
+
+Let's look at the optimal mtry value based on OOB and number of trees = 500
+```{r}
+tic()
+rf_tune <- tuneRF(data %>% 
+                     select(-subject_index, -activity),
+                  data$activity, 
+                  mtryStart = 2, 
+                  ntreeTry = 500,
+                  stepFactor = 3,
+                  improve = 0.001,
+                  trace = TRUE,
+                  plot = TRUE)
+toc()
+```
+
+### Random search
+```{r}
+folds = groupKFold(data$subject_index, k = 10)
+fitControl <- trainControl(## 10-fold CV
+  index = folds,
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  savePredictions='all',
+  verboseIter = TRUE,
+  allowParallel = TRUE,
+  search = "random")
+
+tic()
+rf_random <- train(
+   activity ~ ., 
+   data = data %>% select(-subject_index), 
+   method = "rf", 
+   metric = "Accuracy", 
+   tuneLength = 10, 
+   trControl = fitControl)
+toc()
+
+print(rf_random)
+plot(rf_random)
+```
+
+### Grid Search
+```{r}
+folds = groupKFold(data$subject_index, k = 10)
+fitControl <- trainControl(## 10-fold CV
+  index = folds,
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  savePredictions='all',
+  verboseIter = TRUE,
+  allowParallel = TRUE,
+  search = "grid")
+
+rf_grid = expand.grid(.mtry = seq(2,15,2))
+
+tic()
+rf_fit_grid_cv <- train(
+   activity ~ ., 
+   data = data %>% select(-subject_index), 
+   method = "rf", 
+   metric = "Accuracy",
+   tuneGrid = rf_grid,
+   trControl = fitControl)
+toc()
+
+print(rf_fit_grid_cv)
+plot(rf_fit_grid_cv)
+```
+
+### Tune number of trees
+```{r}
+folds = groupKFold(data$subject_index, k = 10)
+fitControl <- trainControl(## 10-fold CV
+  index = folds,
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  savePredictions='all',
+  verboseIter = TRUE,
+  allowParallel = TRUE,
+  search = "grid")
+
+rf_grid = expand.grid(.mtry = rf_fit_grid_cv$bestTune$mtry)
+
+modellist <- list()
+for (ntree in c(350, 500, 750, 1000, 1500)) {
+	fit <- train(
+   activity ~ ., 
+   data = data %>% select(-subject_index), 
+   method = "rf", 
+   metric = "Accuracy",
+   tuneGrid = rf_grid,
+   trControl = fitControl,
+   ntree = ntree)
+	key <- toString(ntree)
+	modellist[[key]] <- fit
+}
+# compare results
+results <- resamples(modellist)
+summary(results)
+dotplot(results)
+```
+
+
+
+
+CV parameters:
+```{r}
+folds = groupKFold(data$subject_index, k = 10)
+fitControl <- trainControl(## 10-fold CV
+  index = folds,
+  method = "cv",
+  number = 10,
+  classProbs = TRUE,
+  savePredictions='all',
+  verboseIter = TRUE,
+  allowParallel = TRUE)
+```
+
+
+Fit a random forest model with best parameters
+```{r}
+rf_fit <- randomForest(
+   activity ~ ., data = data %>% select(-subject_index),
+   mtry = rf_fit_grid_cv$bestTune$mtry,
+   ntree = 1000,
+   importance = TRUE
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+https://machinelearningmastery.com/tune-machine-learning-algorithms-in-r/
