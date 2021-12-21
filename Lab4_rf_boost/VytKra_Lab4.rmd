@@ -27,15 +27,18 @@ library(caret)
 library(randomForest)
 library(janitor)
 library(tictoc)
+library(tidyr)
+library(tibble)
+library(ggrepel)
 
 # Function for 4 class accuracy from confusion matrix
 classAcc <- function(confusionMatrix) {
-  class1 <- round(confusionMatrix$table[1, 1] / sum(confusionMatrix$table[, 1]) * 100, 1)
-  class2 <- round(confusionMatrix$table[2, 2] / sum(confusionMatrix$table[, 2]) * 100, 1)
-  class3 <- round(confusionMatrix$table[3, 3] / sum(confusionMatrix$table[, 3]) * 100, 1)
-  class4 <- round(confusionMatrix$table[4, 4] / sum(confusionMatrix$table[, 4]) * 100, 1)
+  class1 <- round(confusionMatrix[1, 1] / sum(confusionMatrix[, 1]) * 100, 1)
+  class2 <- round(confusionMatrix[2, 2] / sum(confusionMatrix[, 2]) * 100, 1)
+  class3 <- round(confusionMatrix[3, 3] / sum(confusionMatrix[, 3]) * 100, 1)
+  class4 <- round(confusionMatrix[4, 4] / sum(confusionMatrix[, 4]) * 100, 1)
   acc <- c(class1, class2, class3, class4 )
-  names(acc) <- colnames(confusionMatrix$table)
+  names(acc) <- colnames(confusionMatrix)
   return(acc)
 }
 ```
@@ -162,8 +165,17 @@ data <- data %>%
    mutate(subject_index = as.factor(subject_index))
 ```
 
-## Fitting Random Forest Model
+Let's look how obersvations are distributed across subjects and activity types:
+```{r}
+data %>% 
+   group_by(subject_index, activity) %>% 
+   summarise(n = n()) %>% 
+   pivot_wider(names_from = activity, values_from = n)
+```
 
+Each person has 28 observations of each activity. We are not going to use Out-of-Bag score for tuning parameters as this would be misleading. Same person with the same activity could be splited into different sets and the result based on OOB could be misleading. We are not going to have this problem with Cross Validation, as we can specify folds to be grouped according to subjects.
+
+## Fitting Random Forest Model
 
 Let's look at the optimal mtry value based on OOB and number of trees = 500
 ```{r}
@@ -179,6 +191,8 @@ rf_tune <- tuneRF(data %>%
                   plot = TRUE)
 toc()
 ```
+
+Based on OOB the optimal mtry was found to be `r rf_tune[which(rf_tune[,2] == min(rf_tune[,2])),1]`. We are not going to use this value as mentioned previously.
 
 ### Random search
 ```{r}
@@ -207,6 +221,8 @@ print(rf_random)
 plot(rf_random)
 ```
 
+Based on random search, the optimal mtry was found to be `r rf_random$bestTune$mtry`. We are going to also use a grid search, to look if an optimal mtry could be smalle and closer to sqrt(m) value.
+
 ### Grid Search
 ```{r}
 folds = groupKFold(data$subject_index, k = 10)
@@ -220,7 +236,7 @@ fitControl <- trainControl(## 10-fold CV
   allowParallel = TRUE,
   search = "grid")
 
-rf_grid = expand.grid(.mtry = seq(2,15,2))
+rf_grid = expand.grid(.mtry = c(seq(2,15,2), seq(rf_random$bestTune$mtry - 4, rf_random$bestTune$mtry + 4, 2)))
 
 tic()
 rf_fit_grid_cv <- train(
@@ -235,6 +251,8 @@ toc()
 print(rf_fit_grid_cv)
 plot(rf_fit_grid_cv)
 ```
+
+Using grid search we found an optimal value of mtry to be `r rf_fit_grid_cv$bestTune$mtry`. We are going to use this value in our further analysis.
 
 ### Tune number of trees
 ```{r}
@@ -268,12 +286,15 @@ for (ntree in c(350, 500, 750, 1000, 1500)) {
 results <- resamples(modellist)
 summary(results)
 dotplot(results)
+
+mtry_optimal <- rf_fit_grid_cv$bestTune$mtry
+
+ntree_optimal <- as.integer(names(which(summary(results)$statistics$Accuracy[,"Mean"] == max(summary(results)$statistics$Accuracy[,"Mean"]))))
 ```
 
+Optimal number of trees were found to be `r ntree_optimal`.
 
-
-
-CV parameters:
+Fit a random forest model with best parameters (CV)
 ```{r}
 folds = groupKFold(data$subject_index, k = 10)
 fitControl <- trainControl(## 10-fold CV
@@ -284,27 +305,153 @@ fitControl <- trainControl(## 10-fold CV
   savePredictions='all',
   verboseIter = TRUE,
   allowParallel = TRUE)
+
+tic()
+rf_fit_cv <- train(
+   activity ~ ., 
+   data = data %>% select(-subject_index), 
+   method = "rf", 
+   tuneGrid = expand.grid(.mtry = mtry_optimal),
+   ntree = ntree_optimal,
+   trControl = fitControl,
+   importance = TRUE)
+toc()
+
 ```
 
-
-Fit a random forest model with best parameters
 ```{r}
-rf_fit <- randomForest(
-   activity ~ ., data = data %>% select(-subject_index),
-   mtry = rf_fit_grid_cv$bestTune$mtry,
-   ntree = 1000,
-   importance = TRUE
-)
+rf_final <- rf_fit_cv$finalModel
 ```
 
 
+```{r}
+print(rf_final)
+
+confusion_matrix <- rf_final$confusion[,1:4]
+classAcc(confusion_matrix)
+```
+
+Final model has accuracy of `r round(sum(diag(confusion_matrix)) / nrow(data) * 100, 2)`%. 
+
+```{r}
+rf_margin <- margin(rf_final, data$activity)
+df = data.frame(margin = as.numeric(rf_margin), 
+                label = names(rf_margin), 
+                index =  1:length(rf_margin))
+df %>% 
+   ggplot(aes(x = index,y = margin,col = label)) + 
+   geom_point()
+
+df %>% 
+   ggplot(aes(x = margin, fill = label)) + 
+   geom_histogram() + 
+   facet_wrap(~label)
+```
+
+We clearly see, that only a small number of observations were misclassified (margin < 0). We also clearly see that majority of Neutral and Physical activity observations were classified correctly with almost perfect voting score for the correct class. One could also identify, that for classes Emotional and Mental, most of the correct guesses were made with ~0.5 - ~0.75 majority votes. To increase the model effectiveness, one should find more features to distinguish Emotional and Mental classes.
+
+Top 25 variables by importance according to the accuracy:
+```{r}
+varImpPlot(rf_final, n.var = 25, type = 1)
+```
+
+We can see, that there are no exceptional features which contributes the most to the accuracy as the difference between SORTED variables by mean decrease in accuracy are not that high.
+
+Let's explore model performance for each subject:
+```{r}
+# get a table of actual and predicted values for each subject
+df <- data.frame(
+   subject_id = data$subject_index,
+   activity = rf_final$y,
+   activity_prediction = rf_final$predicted
+)
+
+# list of tables by each subject
+df_subject <- split(df, df$subject_id)
+
+# list of confusion matrices by each subject
+df_subject <- lapply(df_subject, function(x){confusionMatrix(x$activity_prediction, x$activity)$table})
+
+# list of class and overall accuracies by each subject
+df_subject <-lapply(df_subject, function(x){
+   AccClasses = classAcc(x)
+   AccOverall = round(sum(diag(x)) / sum(colSums(x)) * 100, 2)
+   acc = c(AccClasses, AccOverall)
+   names(acc) = c(names(AccClasses), "OVERALL")
+   return(acc)
+})
+
+df_colnames <- names(df_subject[[1]])
+
+# a table of class and overall accuracies by each subject
+df_subject <- do.call(rbind.data.frame, df_subject) %>% 
+   rownames_to_column("subject_id") %>% 
+   mutate(subject_id = as.numeric(subject_id))
+colnames(df_subject) <- c("subject_id", df_colnames)
+
+# Plot of overall
+df_subject %>%
+  arrange(OVERALL) %>%
+  mutate(subject_id = factor(subject_id, levels = subject_id)) %>% 
+  ggplot( aes(x = subject_id, y = OVERALL)) +
+   geom_point( size = 4, color = "orange") +
+   coord_flip() +
+   theme_bw() +
+   lims(y = c(min(df_subject$OVERALL) - 0.5, 100)) +
+   geom_label_repel(aes(label = paste0("id: ", subject_id)),
+                  box.padding   = 0.35, 
+                  point.padding = 0.5,
+                  segment.color = 'grey50') +
+   theme(axis.text.y=element_blank(),
+         axis.title.y=element_blank())
 
 
+df_subject %>% 
+   pivot_longer(cols = c(-subject_id), names_to = "Type", values_to = "Accuracy") %>% 
+   group_by(Type, Accuracy_Rounded = round(Accuracy)) %>% 
+   summarise(n = n()) %>% 
+   pivot_wider(names_from = Type, values_from = n, values_fill = 0) %>% 
+   arrange(desc(Accuracy_Rounded))
+```
 
 
+```{r}
+df <- importance(rf_final) %>% 
+   as.data.frame() %>% 
+   rownames_to_column("feature") %>% 
+   mutate(
+      feature_type = case_when(
+         substr(feature, 0, 2) == "ec" ~ "ECG",
+         substr(feature, 0, 2) == "it" ~ "TEB",
+         substr(feature, 0, 2) == "ed" ~ "EDA",
+         TRUE ~ "ERROR"
+      )
+   ) %>% 
+   mutate(feature = paste0(feature_type, " - ", feature))
 
+df %>% 
+   arrange(MeanDecreaseAccuracy) %>%
+   tail(25) %>% 
+   mutate(feature = factor(feature, levels = feature)) %>% 
+   ggplot(aes(MeanDecreaseAccuracy, feature)) +
+   geom_point() +
+   scale_x_continuous(limits=c(0,NA), expand=expansion(c(0,0.04))) +
+   theme_bw() +
+   theme(panel.grid.minor=element_blank(),
+         panel.grid.major.x=element_blank(),
+         panel.grid.major.y=element_line(),
+         axis.title=element_blank())
 
+temp <- df %>% 
+   arrange(MeanDecreaseAccuracy) %>%
+   group_by(feature_type) %>% 
+   summarise(n_all = n())
 
-
-
-https://machinelearningmastery.com/tune-machine-learning-algorithms-in-r/
+df %>% 
+   arrange(MeanDecreaseAccuracy) %>%
+   tail(25) %>% 
+   group_by(feature_type) %>% 
+   summarise(n = n()) %>% 
+   left_join(temp, by = "feature_type") %>% 
+   mutate(n_prop = n / n_all * 100)
+```
