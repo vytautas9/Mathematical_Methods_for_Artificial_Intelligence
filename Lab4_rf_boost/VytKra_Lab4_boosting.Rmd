@@ -101,11 +101,11 @@ tune_grid <- expand.grid(
   subsample = 1
 )
 
-folds = groupKFold(data$subject_index, k = 5)
+folds = groupKFold(data$subject_index, k = 3)
 tune_control <- trainControl(
   index = folds,
   method = "cv",
-  number = 2,
+  number = 3,
   verboseIter = FALSE#, allowParallel = TRUE
   )
 
@@ -240,11 +240,11 @@ final_grid %>%
 ```
 
 ```{r}
-folds = groupKFold(data$subject_index, k = 5)
+folds = groupKFold(data$subject_index, k = 3)
 train_control <- trainControl(
   index = folds,
   method = "cv",
-  number = 5,
+  number = 3,
   verboseIter = FALSE,
   classProbs = TRUE,
   savePredictions='all'
