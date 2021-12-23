@@ -1,9 +1,9 @@
 ---
-title: "Mathematical Methods for Artificial Intelligence Lab 4 - Random Forest and Boosting Alg."
+title: "Mathematical Methods for Artificial Intelligence Lab 4 - Random Forest"
 author: "Vytautas Kraujalis"
 date: '2021-12-18'
 output: 
-  pdf_document:
+  word_document:
     toc: true 
     toc_depth: 3
     number_sections: true
@@ -62,7 +62,6 @@ data_names <- read.table("names.txt") %>%
 ```
 
 ## Data Preparation
-### Column names
 ```{r}
 length(data_names$column_names)
 
@@ -177,9 +176,11 @@ Each person has 28 observations of each activity. We are not going to use Out-of
 
 ## Fitting Random Forest Model
 
+### Tune with OOB
 Let's look at the optimal mtry value based on OOB and number of trees = 500
 ```{r}
 tic()
+png(file = "Tune_oob.png", width = 1200, height = 850)
 rf_tune <- tuneRF(data %>% 
                      select(-subject_index, -activity),
                   data$activity, 
@@ -189,6 +190,7 @@ rf_tune <- tuneRF(data %>%
                   improve = 0.001,
                   trace = TRUE,
                   plot = TRUE)
+dev.off()
 toc()
 ```
 
@@ -218,7 +220,10 @@ rf_random <- train(
 toc()
 
 print(rf_random)
+
+png(file = "Tune_randomSearch.png", width = 1200, height = 850)
 plot(rf_random)
+dev.off()
 ```
 
 Based on random search, the optimal mtry was found to be `r rf_random$bestTune$mtry`. We are going to also use a grid search, to look if an optimal mtry could be smalle and closer to sqrt(m) value.
@@ -249,7 +254,10 @@ rf_fit_grid_cv <- train(
 toc()
 
 print(rf_fit_grid_cv)
+
+png(file = "Tune_gridSearch.png", width = 1200, height = 850)
 plot(rf_fit_grid_cv)
+dev.off()
 ```
 
 Using grid search we found an optimal value of mtry to be `r rf_fit_grid_cv$bestTune$mtry`. We are going to use this value in our further analysis.
@@ -285,7 +293,10 @@ for (ntree in c(350, 500, 750, 1000, 1500)) {
 # compare results
 results <- resamples(modellist)
 summary(results)
+
+png(file = "Tune_ntree.png", width = 1200, height = 850)
 dotplot(results)
+dev.off()
 
 mtry_optimal <- rf_fit_grid_cv$bestTune$mtry
 
@@ -294,6 +305,7 @@ ntree_optimal <- as.integer(names(which(summary(results)$statistics$Accuracy[,"M
 
 Optimal number of trees were found to be `r ntree_optimal`.
 
+### Optimal Random Forest model
 Fit a random forest model with best parameters (CV)
 ```{r}
 folds = groupKFold(data$subject_index, k = 10)
@@ -340,22 +352,21 @@ df = data.frame(margin = as.numeric(rf_margin),
                 index =  1:length(rf_margin))
 df %>% 
    ggplot(aes(x = index,y = margin,col = label)) + 
-   geom_point()
+   geom_point() +
+   theme(text = element_text(size = 14))
+
+ggsave(filename = "Margin_ScatterPlot.png", width = 14, height = 7, units = "in", bg = "white")
 
 df %>% 
    ggplot(aes(x = margin, fill = label)) + 
    geom_histogram() + 
-   facet_wrap(~label)
+   facet_wrap(~label) +
+   theme(text = element_text(size = 14))
+
+ggsave(filename = "Margin_BarPlot.png", width = 14, height = 7, units = "in", bg = "white")
 ```
 
 We clearly see, that only a small number of observations were misclassified (margin < 0). We also clearly see that majority of Neutral and Physical activity observations were classified correctly with almost perfect voting score for the correct class. One could also identify, that for classes Emotional and Mental, most of the correct guesses were made with ~0.5 - ~0.75 majority votes. To increase the model effectiveness, one should find more features to distinguish Emotional and Mental classes.
-
-Top 25 variables by importance according to the accuracy:
-```{r}
-varImpPlot(rf_final, n.var = 25, type = 1)
-```
-
-We can see, that there are no exceptional features which contributes the most to the accuracy as the difference between SORTED variables by mean decrease in accuracy are not that high.
 
 Let's explore model performance for each subject:
 ```{r}
@@ -395,6 +406,7 @@ df_subject %>%
   mutate(subject_id = factor(subject_id, levels = subject_id)) %>% 
   ggplot( aes(x = subject_id, y = OVERALL)) +
    geom_point( size = 4, color = "orange") +
+   ylab("Overall Accuracy (%)") +
    coord_flip() +
    theme_bw() +
    lims(y = c(min(df_subject$OVERALL) - 0.5, 100)) +
@@ -403,8 +415,10 @@ df_subject %>%
                   point.padding = 0.5,
                   segment.color = 'grey50') +
    theme(axis.text.y=element_blank(),
-         axis.title.y=element_blank())
+         axis.title.y=element_blank(),
+         text = element_text(size = 14))
 
+ggsave(filename = "OverallAccBySubject.png", width = 14, height = 7, units = "in", bg = "white")
 
 df_subject %>% 
    pivot_longer(cols = c(-subject_id), names_to = "Type", values_to = "Accuracy") %>% 
@@ -440,7 +454,11 @@ df %>%
    theme(panel.grid.minor=element_blank(),
          panel.grid.major.x=element_blank(),
          panel.grid.major.y=element_line(),
-         axis.title=element_blank())
+         axis.title=element_blank(),
+         text = element_text(size = 14)) +
+   labs(title = "Mean decrease in accuracy")
+
+ggsave(filename = "VariableImportance.png", width = 14, height = 7, units = "in", bg = "white")
 
 temp <- df %>% 
    arrange(MeanDecreaseAccuracy) %>%

@@ -1,0 +1,308 @@
+---
+title: "Mathematical Methods for Artificial Intelligence Lab 4 - Boosting Alg."
+author: "Vytautas Kraujalis"
+date: '2021-12-23'
+output: 
+  word_document:
+    toc: true 
+    toc_depth: 3
+    number_sections: true
+    highlight: tango
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Gradient Boosting
+## Required packages
+```{r}
+library(data.table)
+library(dplyr)
+library(tictoc)
+library(janitor)
+library(caret)
+library(xgboost)
+
+# Function for 4 class accuracy from confusion matrix
+classAcc <- function(confusionMatrix) {
+  class1 <- round(confusionMatrix$table[1, 1] / sum(confusionMatrix$table[, 1]) * 100, 1)
+  class2 <- round(confusionMatrix$table[2, 2] / sum(confusionMatrix$table[, 2]) * 100, 1)
+  class3 <- round(confusionMatrix$table[3, 3] / sum(confusionMatrix$table[, 3]) * 100, 1)
+  class4 <- round(confusionMatrix$table[4, 4] / sum(confusionMatrix$table[, 4]) * 100, 1)
+  acc <- c(class1, class2, class3, class4 )
+  names(acc) <- colnames(confusionMatrix$table)
+  return(acc)
+}
+```
+
+
+## Reading Data
+```{r}
+set.seed(123)
+
+data_original <- fread("activity.csv")
+data_names <- read.table("names.txt") %>% 
+   rename(column_names = V1)
+```
+
+## Data Preparation
+```{r}
+data <- data_original
+colnames(data) <- data_names$column_names
+
+data <- data %>% 
+   clean_names() %>% 
+   mutate_if(is.character, as.factor)
+data <- data %>% 
+   select(-nearZeroVar(data))
+```
+
+```{r}
+# Correlation
+
+corr_simple <- function(df,sig=0.5){
+  corr <- cor(df)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > sig) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  return(corr)
+}
+
+correlation_matrix = cor(data %>% select(-activity, -subject_index))
+```
+
+```{r}
+data <- data %>% 
+   select(-findCorrelation(correlation_matrix, cutoff = 0.99)) %>% 
+   mutate(subject_index = as.factor(subject_index))
+```
+
+## Fitting Xgboost model
+```{r}
+tune_grid <- expand.grid(
+  nrounds = seq(from = 200, to = 1000, by = 50),
+  eta = c(0.025, 0.05, 0.1, 0.3),
+  max_depth = c(2, 3, 4, 5, 6),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+folds = groupKFold(data$subject_index, k = 5)
+tune_control <- trainControl(
+  index = folds,
+  method = "cv",
+  number = 2,
+  verboseIter = FALSE#, allowParallel = TRUE
+  )
+
+tic()
+xgb_tune <- train(
+  activity ~ ., data = data %>% select(-subject_index),
+  trControl = tune_control,
+  tuneGrid = tune_grid,
+  method = "xgbTree",
+  verbose = TRUE
+)
+toc()
+```
+
+```{r}
+# helper function for the plots
+tuneplot <- function(x, probs = .10) {
+  ggplot(x) +
+    coord_cartesian(ylim = c(quantile(x$results$Accuracy, probs = probs), max(x$results$Accuracy))) +
+    theme_bw()
+}
+
+tuneplot(xgb_tune)
+
+xgb_tune$bestTune %>% 
+   t()
+```
+
+
+```{r}
+tune_grid2 <- expand.grid(
+  nrounds = seq(from = 50, to = 1000, by = 50),
+  eta = xgb_tune$bestTune$eta,
+  max_depth = ifelse(xgb_tune$bestTune$max_depth == 2,
+    c(xgb_tune$bestTune$max_depth:4),
+    xgb_tune$bestTune$max_depth - 1:xgb_tune$bestTune$max_depth + 1),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = c(1, 2, 3),
+  subsample = 1
+)
+
+tic()
+xgb_tune2 <- train(
+  activity ~ ., data = data %>% select(-subject_index),
+  trControl = tune_control,
+  tuneGrid = tune_grid2,
+  method = "xgbTree",
+  verbose = TRUE
+)
+toc()
+```
+
+```{r}
+tuneplot(xgb_tune2)
+
+xgb_tune2$bestTune %>% 
+   t()
+```
+
+```{r}
+tune_grid3 <- expand.grid(
+  nrounds = seq(from = 50, to = 1000, by = 50),
+  eta = xgb_tune$bestTune$eta,
+  max_depth = xgb_tune2$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = c(0.4, 0.6, 0.8, 1.0),
+  min_child_weight = xgb_tune2$bestTune$min_child_weight,
+  subsample = c(0.5, 0.75, 1.0)
+)
+
+tic()
+xgb_tune3 <- train(
+  activity ~ ., data = data %>% select(-subject_index),
+  trControl = tune_control,
+  tuneGrid = tune_grid3,
+  method = "xgbTree",
+  verbose = TRUE
+)
+toc()
+```
+
+```{r}
+tuneplot(xgb_tune3)
+
+xgb_tune3$bestTune %>% 
+   t()
+```
+
+```{r}
+tune_grid5 <- expand.grid(
+  nrounds = seq(from = 100, to = 10000, by = 100),
+  eta = c(0.001, 0.005, 0.01, 0.015, 0.02, 0.025),
+  max_depth = xgb_tune2$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = xgb_tune3$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune2$bestTune$min_child_weight,
+  subsample = xgb_tune3$bestTune$subsample
+)
+
+tic()
+xgb_tune5 <- train(
+  activity ~ ., data = data %>% select(-subject_index),
+  trControl = tune_control,
+  tuneGrid = tune_grid5,
+  method = "xgbTree",
+  verbose = TRUE
+)
+toc()
+```
+
+```{r}
+tuneplot(xgb_tune5)
+
+xgb_tune5$bestTune %>% 
+   t()
+```
+
+```{r}
+final_grid <- expand.grid(
+  nrounds = xgb_tune5$bestTune$nrounds,
+  eta = xgb_tune5$bestTune$eta,
+  max_depth = xgb_tune5$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = xgb_tune5$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune5$bestTune$min_child_weight,
+  subsample = xgb_tune5$bestTune$subsample
+)
+
+final_grid %>% 
+   t()
+```
+
+```{r}
+folds = groupKFold(data$subject_index, k = 5)
+train_control <- trainControl(
+  index = folds,
+  method = "cv",
+  number = 5,
+  verboseIter = FALSE,
+  classProbs = TRUE,
+  savePredictions='all'
+  )
+
+tic()
+xgb_model <- train(
+  activity ~ ., data = data %>% select(-subject_index),
+  trControl = train_control,
+  tuneGrid = final_grid,
+  method = "xgbTree",
+  verbose = TRUE
+)
+toc()
+```
+
+```{r}
+xgb_final <- xgb_model$finalModel
+```
+
+```{r}
+prediction <- data.frame(xgb_model$pred)
+
+confusion_matrix <- confusionMatrix(
+   factor(prediction$pred),
+   factor(prediction$obs),
+   mode = "everything"
+)
+confusion_matrix
+classAcc(confusion_matrix)
+```
+
+```{r}
+data_pred <- predict(xgb_final, newdata = data %>% select(-subject_index, -activity) %>% data.matrix())
+data_prediction <- matrix(data_pred, nrow = 4,
+                          ncol = length(data_pred)/4) %>%
+  t() %>%
+  data.frame() %>%
+  mutate(label = as.numeric(data$activity),
+         max_prob = max.col(., "last"))
+
+confusionMatrix(factor(data_prediction$max_prob),
+                factor(data_prediction$label),
+                mode = "everything")
+```
+
+
+
+```{r}
+importance <- xgb.importance(model = xgb_final)
+
+importance %>% 
+   xgb.ggplot.importance(top_n = 25, measure = NULL, rel_to_first = F)
+```
+
+
+
+
+
+https://www.kaggle.com/pelkoja/visual-xgboost-tuning-with-caret
+https://www.r-bloggers.com/2019/10/explaining-predictions-boosted-trees-post-hoc-analysis-xgboost/
