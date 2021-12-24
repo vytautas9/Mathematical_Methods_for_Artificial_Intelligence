@@ -36,6 +36,9 @@ classAcc <- function(confusionMatrix) {
   names(acc) <- colnames(confusionMatrix$table)
   return(acc)
 }
+
+# remove scientific notation
+options(scipen = 100)
 ```
 
 
@@ -90,6 +93,9 @@ data <- data %>%
 ```
 
 ## Fitting Xgboost model
+
+### Tuning learning rate
+We'll look for an optimal learning rate which we will use to find other optimal parameters.
 ```{r}
 tune_grid <- expand.grid(
   nrounds = seq(from = 200, to = 1000, by = 50),
@@ -131,20 +137,26 @@ tuneplot <- function(x, probs = .10) {
 tuneplot(xgb_tune)
 
 xgb_tune$bestTune %>% 
+   mutate_all(round, digits = 5) %>% 
    t()
 ```
 
+Seems like the best accuracy is reached using `r xgb_tune$bestTune$eta` learning rate with `r xgb_tune$bestTune$nrounds` number of trees and with max tree depth equal to `r xgb_tune$bestTune$max_depth`. We will use this learning rate in our further tuning analysis.
 
+### Tuning max tree depth and minimum child weight
 ```{r}
+
 tune_grid2 <- expand.grid(
   nrounds = seq(from = 50, to = 1000, by = 50),
   eta = xgb_tune$bestTune$eta,
-  max_depth = ifelse(xgb_tune$bestTune$max_depth == 2,
-    c(xgb_tune$bestTune$max_depth:4),
-    xgb_tune$bestTune$max_depth - 1:xgb_tune$bestTune$max_depth + 1),
+  max_depth = if(xgb_tune$bestTune$max_depth == 2){
+     seq(xgb_tune$bestTune$max_depth, 4, 1)
+  }else{
+     seq(xgb_tune$bestTune$max_depth - 1, xgb_tune$bestTune$max_depth + 1, 1)
+  },
   gamma = 0,
   colsample_bytree = 1,
-  min_child_weight = c(1, 2, 3),
+  min_child_weight = c(1, 2, 3, 4),
   subsample = 1
 )
 
@@ -166,6 +178,10 @@ xgb_tune2$bestTune %>%
    t()
 ```
 
+Looks like a better accuracy can be obtained using `r xgb_tune2$bestTune$min_child_weight` minimal child weight and with `r xgb_tune2$bestTune$max_depth` max depth, same as before.
+
+
+### Tuning row and column sampling
 ```{r}
 tune_grid3 <- expand.grid(
   nrounds = seq(from = 50, to = 1000, by = 50),
@@ -195,8 +211,11 @@ xgb_tune3$bestTune %>%
    t()
 ```
 
+Best accuracy is reached using `r xgb_tune3$bestTune$colsample_bytree` column sample and `r xgb_tune3$bestTune$subsample` row sample.
+
+### Final tune for number of trees and learning rate with other optimal parameters
 ```{r}
-tune_grid5 <- expand.grid(
+tune_grid4 <- expand.grid(
   nrounds = seq(from = 100, to = 10000, by = 100),
   eta = c(0.001, 0.005, 0.01, 0.015, 0.02, 0.025),
   max_depth = xgb_tune2$bestTune$max_depth,
@@ -207,10 +226,10 @@ tune_grid5 <- expand.grid(
 )
 
 tic()
-xgb_tune5 <- train(
+xgb_tune4 <- train(
   activity ~ ., data = data %>% select(-subject_index),
   trControl = tune_control,
-  tuneGrid = tune_grid5,
+  tuneGrid = tune_grid4,
   method = "xgbTree",
   verbose = TRUE
 )
@@ -218,27 +237,29 @@ toc()
 ```
 
 ```{r}
-tuneplot(xgb_tune5)
+tuneplot(xgb_tune4)
+```
 
-xgb_tune5$bestTune %>% 
+Final parameters:
+```{r}
+xgb_tune4$bestTune %>% 
    t()
 ```
+
 
 ```{r}
 final_grid <- expand.grid(
-  nrounds = xgb_tune5$bestTune$nrounds,
-  eta = xgb_tune5$bestTune$eta,
-  max_depth = xgb_tune5$bestTune$max_depth,
+  nrounds = xgb_tune4$bestTune$nrounds,
+  eta = xgb_tune4$bestTune$eta,
+  max_depth = xgb_tune4$bestTune$max_depth,
   gamma = 0,
-  colsample_bytree = xgb_tune5$bestTune$colsample_bytree,
-  min_child_weight = xgb_tune5$bestTune$min_child_weight,
-  subsample = xgb_tune5$bestTune$subsample
+  colsample_bytree = xgb_tune4$bestTune$colsample_bytree,
+  min_child_weight = xgb_tune4$bestTune$min_child_weight,
+  subsample = xgb_tune4$bestTune$subsample
 )
-
-final_grid %>% 
-   t()
 ```
 
+### Fitting model with final optimal parameters
 ```{r}
 folds = groupKFold(data$subject_index, k = 3)
 train_control <- trainControl(
@@ -266,18 +287,6 @@ xgb_final <- xgb_model$finalModel
 ```
 
 ```{r}
-prediction <- data.frame(xgb_model$pred)
-
-confusion_matrix <- confusionMatrix(
-   factor(prediction$pred),
-   factor(prediction$obs),
-   mode = "everything"
-)
-confusion_matrix
-classAcc(confusion_matrix)
-```
-
-```{r}
 data_pred <- predict(xgb_final, newdata = data %>% select(-subject_index, -activity) %>% data.matrix())
 data_prediction <- matrix(data_pred, nrow = 4,
                           ncol = length(data_pred)/4) %>%
@@ -286,12 +295,18 @@ data_prediction <- matrix(data_pred, nrow = 4,
   mutate(label = as.numeric(data$activity),
          max_prob = max.col(., "last"))
 
-confusionMatrix(factor(data_prediction$max_prob),
-                factor(data_prediction$label),
-                mode = "everything")
+confusion_matrix <- confusionMatrix(factor(data_prediction$max_prob), factor(data_prediction$label))
+confusion_matrix
 ```
 
+Final model has overall accuracy of `r confusion_matrix$overall["Accuracy"] * 100`%, while for each class accuracies are:
+```{r}
+classAccuracies <- confusion_matrix$byClass[,"Sensitivity"]*100
+names(classAccuracies) <- levels(data$activity)
+classAccuracies
+```
 
+The model predicts physical class almost perfectly but struggles with other 3 classes.
 
 ```{r}
 importance <- xgb.importance(model = xgb_final)
@@ -300,9 +315,8 @@ importance %>%
    xgb.ggplot.importance(top_n = 25, measure = NULL, rel_to_first = F)
 ```
 
+According to feature importance and top 25 variables, there are 2 variables that stood up: one from ECG and one from TEB type of feature. Those 2 features are the most important according to the xgboost method.
 
-
-
-
+## References
 https://www.kaggle.com/pelkoja/visual-xgboost-tuning-with-caret
 https://www.r-bloggers.com/2019/10/explaining-predictions-boosted-trees-post-hoc-analysis-xgboost/
